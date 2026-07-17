@@ -6,10 +6,10 @@ import { mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import {
-  AuthStorage,
   createAgentSession,
   getAgentDir,
   ModelRegistry,
+  ModelRuntime,
   parseSessionEntries,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
@@ -23,6 +23,11 @@ function defaultSessionDir(cwd) {
   const resolvedCwd = resolve(cwd);
   const safePath = `--${resolvedCwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
   return join(getAgentDir(), "sessions", safePath);
+}
+
+/** Sync ModelRegistry facade over session.modelRuntime (AuthStorage removed in SDK). */
+function modelRegistry(session) {
+  return new ModelRegistry(session.modelRuntime);
 }
 
 /** @typedef {import("@earendil-works/pi-coding-agent").AgentSession} AgentSession */
@@ -327,7 +332,7 @@ export class SessionHub {
         sessionManager: SessionManager.inMemory(process.cwd()),
       });
       this._warmSession = session;
-      this._warmReg = session.modelRegistry;
+      this._warmReg = modelRegistry(session);
     } catch (err) {
       console.error(
         "[pi-gui] model registry warm failed",
@@ -507,7 +512,7 @@ export class SessionHub {
     if (cur?.provider === saved.provider && cur?.id === saved.modelId) {
       return fallbackMsg;
     }
-    const model = session.modelRegistry.find(saved.provider, saved.modelId);
+    const model = modelRegistry(session).find(saved.provider, saved.modelId);
     if (!model) return fallbackMsg;
     try {
       await session.setModel(model);
@@ -709,20 +714,20 @@ export class SessionHub {
 
   /**
    * List models from a session's modelRegistry, or the package-warmed registry.
-   * Bare ModelRegistry.create() omits extension providers (grok-sdk, cursor, …).
+   * Bare ModelRuntime.create() omits extension providers (grok-sdk, cursor, …).
    * @param {string} [sessionId]
    */
   async listModels(sessionId) {
     /** @type {{ getAvailable: () => any[]; getAll: () => any[] } | null | undefined} */
     let reg;
     if (sessionId && this.sessions.has(sessionId)) {
-      reg = this.sessions.get(sessionId).session.modelRegistry;
+      reg = modelRegistry(this.sessions.get(sessionId).session);
     } else {
       const open = this.sessions.values().next().value;
-      reg = open?.session.modelRegistry ?? (await this.#registry());
+      reg = open ? modelRegistry(open.session) : await this.#registry();
     }
     if (!reg) {
-      reg = ModelRegistry.create(AuthStorage.create());
+      reg = new ModelRegistry(await ModelRuntime.create());
     }
     const available = reg.getAvailable();
     // Prefer available; if empty fall back to all. Always merge in providers that
@@ -762,7 +767,7 @@ export class SessionHub {
       if (!body.provider || !body.id) {
         throw new Error("provider+id or cycle required");
       }
-      const model = s.session.modelRegistry.find(body.provider, body.id);
+      const model = modelRegistry(s.session).find(body.provider, body.id);
       if (!model) throw new Error(`Model not found: ${body.provider}/${body.id}`);
       await s.session.setModel(model);
       return this.#meta(s);
