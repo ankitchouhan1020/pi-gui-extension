@@ -1,6 +1,6 @@
 {
   "name": "pi-gui",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Localhost web UI for pi — multi-session chat over the same coding-agent SDK as the terminal.",
   "type": "module",
   "license": "MIT",
@@ -53,7 +53,9 @@
     "prepublishOnly": "npm install --prefix web && npm run build"
   },
   "pi": {
-    "extensions": ["./extensions"]
+    "extensions": [
+      "./extensions"
+    ]
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.80.6"
