@@ -206,3 +206,166 @@ describe("preserveOptimistic", () => {
     assert.equal(out[0]._key, "c:1");
   });
 });
+
+describe("ChatStream event effects", () => {
+  it("merges toolResult by toolCallId only", () => {
+    const s = new ChatStream();
+    s.bindSession("s-tr");
+    s.commitSnapshot([], 0);
+    s.handleFrame(1, {
+      type: "message_start",
+      message: {
+        role: "toolResult",
+        toolCallId: "tc1",
+        content: "partial",
+      },
+    });
+    s.handleFrame(2, {
+      type: "message_end",
+      message: {
+        role: "toolResult",
+        toolCallId: "tc1",
+        content: "final",
+      },
+    });
+    s.handleFrame(3, {
+      type: "message_start",
+      message: {
+        role: "toolResult",
+        toolCallId: "tc2",
+        content: "other",
+      },
+    });
+    assert.equal(s.messages.length, 2);
+    assert.equal(s.messages[0].content, "final");
+    assert.equal(s.messages[1].toolCallId, "tc2");
+  });
+
+  it("bash_start / chunk / end update one bashExecution row", () => {
+    const s = new ChatStream();
+    s.bindSession("s-bash");
+    s.commitSnapshot([], 0);
+    const e1 = s.handleFrame(1, { type: "bash_start", command: "ls" });
+    assert.ok(e1.some((x) => x.type === "bash_running" && x.running === true));
+    s.handleFrame(2, { type: "bash_chunk", command: "ls", chunk: "a" });
+    s.handleFrame(3, { type: "bash_chunk", command: "ls", chunk: "b" });
+    const eEnd = s.handleFrame(4, {
+      type: "bash_end",
+      command: "ls",
+      result: { output: "ab", exitCode: 0 },
+    });
+    assert.ok(eEnd.some((x) => x.type === "bash_running" && x.running === false));
+    assert.equal(s.messages.length, 1);
+    assert.equal(s.messages[0].role, "bashExecution");
+    assert.equal(s.messages[0].output, "ab");
+  });
+
+  it("queue_update and error emit effects", () => {
+    const s = new ChatStream();
+    s.bindSession("s-q");
+    s.commitSnapshot([], 0);
+    const q = s.handleFrame(1, {
+      type: "queue_update",
+      steering: ["s1"],
+      followUp: ["f1"],
+    });
+    assert.deepEqual(q, [
+      { type: "queues", steer: ["s1"], followUp: ["f1"] },
+    ]);
+    const err = s.handleFrame(2, { type: "error", error: "nope" });
+    assert.deepEqual(err, [{ type: "error", error: "nope" }]);
+  });
+
+  it("agent_end willRetry keeps streaming phase", () => {
+    const s = new ChatStream();
+    s.bindSession("s-retry");
+    s.commitSnapshot([], 0);
+    s.handleFrame(1, { type: "agent_start" });
+    s.handleFrame(2, { type: "agent_end", willRetry: true });
+    assert.equal(s.phase, "streaming");
+    s.handleFrame(3, { type: "agent_settled" });
+    assert.equal(s.phase, "idle");
+  });
+
+  it("hot resume skips snapshot when lastSeq in ring", () => {
+    const s = new ChatStream();
+    s.bindSession("s-hot");
+    s.commitSnapshot([{ role: "user", id: "u1", content: "hi" }], 10);
+    s.lastSeq = 10;
+    const effects = s.handleFrame(0, {
+      type: "connected",
+      id: "s-hot",
+      seq: 12,
+      ringStart: 10,
+    });
+    assert.equal(s.isSnapshotting, false);
+    assert.equal(effects[0]?.type, "resumed");
+  });
+
+  it("gap forces need_snapshot", () => {
+    const s = new ChatStream();
+    s.bindSession("s-gap");
+    s.commitSnapshot([{ role: "user", id: "u1", content: "hi" }], 5);
+    s.lastSeq = 5;
+    const effects = s.handleFrame(0, {
+      type: "connected",
+      id: "s-gap",
+      seq: 50,
+      ringStart: 40,
+    });
+    assert.equal(effects[0]?.type, "need_snapshot");
+    assert.equal(s.isSnapshotting, true);
+  });
+
+  it("thinking_level_changed and session_info_changed", () => {
+    const s = new ChatStream();
+    s.bindSession("s-meta");
+    s.commitSnapshot([], 0);
+    assert.deepEqual(s.handleFrame(1, { type: "thinking_level_changed", level: "high" }), [
+      { type: "thinking", level: "high" },
+    ]);
+    assert.deepEqual(s.handleFrame(2, { type: "session_info_changed", name: "n" }), [
+      { type: "session_name", name: "n" },
+    ]);
+  });
+
+  it("compaction + tree_navigated effects", () => {
+    const s = new ChatStream();
+    s.bindSession("s-tree");
+    s.commitSnapshot([], 0);
+    assert.deepEqual(s.handleFrame(1, { type: "compaction_start" }), [
+      { type: "compacting", active: true },
+    ]);
+    assert.deepEqual(
+      s.handleFrame(2, { type: "compaction_end", errorMessage: "x" }),
+      [{ type: "compacting", active: false, errorMessage: "x" }],
+    );
+    assert.deepEqual(
+      s.handleFrame(3, { type: "tree_navigated", editorText: "edit me" }),
+      [{ type: "tree_navigated", editorText: "edit me" }],
+    );
+  });
+
+  it("reconcileFromServer keeps longer streaming tail", () => {
+    const s = new ChatStream();
+    s.bindSession("s-rec");
+    s.commitSnapshot([], 0);
+    s.handleFrame(1, {
+      type: "message_start",
+      message: { role: "user", id: "u1", content: "q" },
+    });
+    s.handleFrame(2, {
+      type: "message_start",
+      message: { role: "assistant", content: "Hello world longer" },
+    });
+    assert.equal(s.phase, "streaming");
+    // lagging server snapshot (shorter)
+    s.reconcileFromServer([
+      { role: "user", id: "u1", content: "q" },
+      { role: "assistant", content: "Hi" },
+    ]);
+    // mid-stream: must not clobber to shorter-only list blindly
+    assert.ok(s.messages.length >= 2);
+    assert.equal(s.messages[0].id, "u1");
+  });
+});

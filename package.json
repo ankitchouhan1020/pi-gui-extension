@@ -36,6 +36,7 @@
     "server/http.js",
     "server/hub.js",
     "server/sse-protocol.js",
+    "server/session-index.js",
     "extensions",
     "dist",
     "README.md",
@@ -51,13 +52,13 @@
     "build": "npm run build --prefix web",
     "start": "node server/cli.js",
     "check": "npm run check --prefix web",
-    "smoke": "node --input-type=module -e \"await import('./server/hub.js'); await import('./server/http.js'); await import('./server/sse-protocol.js'); console.log('smoke ok')\"",
-    "test": "npm run smoke && node --test server/stabilize.test.js server/sse-protocol.test.js && node --experimental-strip-types --test web/src/lib/chat-stream.test.ts",
+    "smoke": "node --input-type=module -e \"await import('./server/hub.js'); await import('./server/http.js'); await import('./server/sse-protocol.js'); await import('./server/session-index.js'); console.log('smoke ok')\"",
+    "test": "npm run smoke && node --test server/stabilize.test.js server/sse-protocol.test.js server/http.contract.test.js && node --experimental-strip-types --test web/src/lib/chat-stream.test.ts extensions/gui.test.ts",
     "prepublishOnly": "npm test && npm install --prefix web && npm run build"
   },
   "pi": {
     "extensions": [
-      "./extensions"
+      "./extensions/gui.ts"
     ]
   },
   "dependencies": {

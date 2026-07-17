@@ -44,6 +44,7 @@ function modelRegistry(session) {
  * @property {number} sseSeq
  * @property {{ seq: number, event: unknown }[]} sseRing
  * @property {ReturnType<typeof setTimeout> | null} [idleTimer]
+ * @property {boolean} [bound] true = external (TUI) session; close detaches only
  */
 
 /** Idle-close when no SSE listeners (0 = disabled). */
@@ -228,7 +229,8 @@ export class SessionHub {
     const s0 = this.require(id);
     return this.#withSessionTurn(s0.id, async () => {
       const s = this.require(s0.id);
-      await this.#withActivate(() => this.#activate(s));
+      // Bound TUI session already has correct extension scope — skip re-activate.
+      if (!s.bound) await this.#withActivate(() => this.#activate(s));
       return await fn(s);
     });
   }
@@ -303,6 +305,8 @@ export class SessionHub {
   #scheduleIdle(s) {
     this.#cancelIdle(s);
     if (!(SESSION_IDLE_MS > 0)) return;
+    // Bound TUI session stays attached; browser can reconnect without /gui again.
+    if (s.bound) return;
     if (s.listeners.size > 0) return;
     s.idleTimer = setTimeout(() => {
       s.idleTimer = null;
@@ -476,6 +480,55 @@ export class SessionHub {
       modelFallbackMessage,
     );
 
+    const entry = this.#registerOpen(session, cwd, { bound: false });
+    return {
+      ...this.#meta(entry),
+      modelFallbackMessage: restoredFallback,
+    };
+  }
+
+  /**
+   * Register an already-running AgentSession (TUI live session).
+   * Does not call bindExtensions or dispose on close.
+   * @param {AgentSession} session
+   * @param {{ cwd?: string }} [opts]
+   */
+  attach(session, opts = {}) {
+    if (!session?.sessionId) throw new Error("attach requires AgentSession");
+    const existing =
+      this.#findOpen(session.sessionId) ||
+      (session.sessionFile ? this.#findOpen(session.sessionFile) : null);
+    if (existing) {
+      if (existing.session === session) return this.#meta(existing);
+      // Same id/path, different object (session replace) — drop stale entry.
+      this.#drop(existing, { dispose: false });
+    }
+    const cwd =
+      opts.cwd ||
+      session.sessionManager?.getCwd?.() ||
+      process.cwd();
+    const entry = this.#registerOpen(session, cwd, { bound: true });
+    return this.#meta(entry);
+  }
+
+  /**
+   * Unbind without disposing the underlying AgentSession.
+   * @param {string} id
+   */
+  detach(id) {
+    const s = this.#findOpen(id);
+    if (!s) return false;
+    this.#drop(s, { dispose: false });
+    return true;
+  }
+
+  /**
+   * @param {AgentSession} session
+   * @param {string} cwd
+   * @param {{ bound?: boolean }} [opts]
+   * @returns {OpenSession}
+   */
+  #registerOpen(session, cwd, opts = {}) {
     const id = session.sessionId;
     /** @type {OpenSession} */
     const entry = {
@@ -487,14 +540,34 @@ export class SessionHub {
       listeners: new Set(),
       sseSeq: 0,
       sseRing: [],
+      bound: Boolean(opts.bound),
     };
     entry.unsub = session.subscribe((event) => this.#fanout(entry, event));
     this.sessions.set(id, entry);
+    return entry;
+  }
 
-    return {
-      ...this.#meta(entry),
-      modelFallbackMessage: restoredFallback,
-    };
+  /**
+   * Remove from hub maps; optionally dispose session (owned only).
+   * @param {OpenSession} cur
+   * @param {{ dispose?: boolean }} [opts]
+   */
+  #drop(cur, opts = {}) {
+    this.#cancelIdle(cur);
+    try {
+      cur.unsub();
+    } catch {
+      /* ignore */
+    }
+    this.sessions.delete(cur.id);
+    this._sessionTurnTails.delete(cur.id);
+    if (opts.dispose) {
+      try {
+        cur.session.dispose();
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   /**
@@ -1094,12 +1167,19 @@ export class SessionHub {
   async close(id) {
     const s = this.#findOpen(id);
     if (!s) return false;
+    // Bound (TUI) sessions: detach only — never dispose or session_shutdown.
+    if (s.bound) {
+      this.#drop(s, { dispose: false });
+      return true;
+    }
     const key = s.path || s.id;
     return this.#withPath(key, async () => {
       const cur = this.sessions.get(s.id);
       if (!cur) return false;
-      this.#cancelIdle(cur);
-      cur.unsub();
+      if (cur.bound) {
+        this.#drop(cur, { dispose: false });
+        return true;
+      }
       try {
         // Session-turn + short activate: process-global scope matches this
         // session so shutdown handlers dispose only this scope.
@@ -1118,9 +1198,7 @@ export class SessionHub {
           err instanceof Error ? err.message : err,
         );
       }
-      cur.session.dispose();
-      this.sessions.delete(cur.id);
-      this._sessionTurnTails.delete(cur.id);
+      this.#drop(cur, { dispose: true });
       return true;
     });
   }

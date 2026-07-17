@@ -16,7 +16,7 @@ flowchart LR
 
   User --> Browser
   Browser -->|REST + SSE /api/*| GUI
-  PiCLI -->|spawn / open| GUI
+  PiCLI -->|in-process listen + attach live| GUI
   GUI --> SDK
   SDK --> Disk
   SDK --> LLM
@@ -89,7 +89,7 @@ sequenceDiagram
 | Transport | REST for commands; **SSE** for stream; no WebSocket |
 | Client truth | `ChatStream`: seq gate + snapshot barrier + id merge |
 | SSE resume | Cold/gap → REST snapshot; hot → ring `seq > after` + live |
-| Process entry | `pi-gui` / `cli.js`, or pi **`/gui`** |
+| Process entry | `pi-gui` / `cli.js` (standalone host), or pi **`/gui`** (in-process + live attach) |
 
 ## Chat stream pipeline (contract)
 

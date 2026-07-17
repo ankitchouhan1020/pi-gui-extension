@@ -259,4 +259,237 @@ describe("SessionHub open/close", () => {
     assert.ok(info.ringStart >= 1);
     await hub.close(a.id);
   });
+
+  it("getMessages appends streamingMessage while streaming", async () => {
+    const a = await hub.open({ cwd, fresh: true });
+    const open = hub.require(a.id);
+    const live = { role: "assistant", content: "partial…", id: "live-a" };
+    Object.defineProperty(open.session, "isStreaming", {
+      get: () => true,
+      configurable: true,
+    });
+    // agent.state is mutable on real sessions
+    if (open.session.agent?.state) {
+      open.session.agent.state.streamingMessage = live;
+    } else {
+      open.session.agent = { state: { streamingMessage: live } };
+    }
+    const msgs = hub.getMessages(a.id);
+    assert.ok(msgs.length >= 1);
+    assert.equal(msgs[msgs.length - 1], live);
+    // idle: no partial tail
+    Object.defineProperty(open.session, "isStreaming", {
+      get: () => false,
+      configurable: true,
+    });
+    const idle = hub.getMessages(a.id);
+    assert.equal(
+      idle.some((m) => /** @type {{ id?: string }} */ (m).id === "live-a"),
+      false,
+    );
+    await hub.close(a.id);
+  });
+
+  it("meta exposes id path cwd streaming model fields", async () => {
+    const a = await hub.open({ cwd, fresh: true });
+    const meta = hub.get(a.id);
+    assert.equal(meta.id, a.id);
+    assert.equal(meta.running, true);
+    assert.equal(typeof meta.streaming, "boolean");
+    assert.ok("path" in meta);
+    assert.ok("cwd" in meta);
+    assert.ok("model" in meta);
+    assert.ok("thinkingLevel" in meta);
+    assert.ok("messageCount" in meta);
+    await hub.close(a.id);
+  });
+
+  it("abort delegates to session.abort", async () => {
+    const a = await hub.open({ cwd, fresh: true });
+    const open = hub.require(a.id);
+    let aborted = false;
+    open.session.abort = async () => {
+      aborted = true;
+    };
+    await hub.abort(a.id);
+    assert.equal(aborted, true);
+    await hub.close(a.id);
+  });
+
+  it("steer while idle falls through to prompt", async () => {
+    const a = await hub.open({ cwd, fresh: true });
+    const open = hub.require(a.id);
+    let prompted = false;
+    Object.defineProperty(open.session, "isStreaming", {
+      get: () => false,
+      configurable: true,
+    });
+    open.session.prompt = async () => {
+      prompted = true;
+    };
+    open.session.steer = async () => {
+      throw new Error("should-not-steer");
+    };
+    await hub.steer(a.id, "hi");
+    assert.equal(prompted, true);
+    await hub.close(a.id);
+  });
+
+  it("native session.subscribe events reach hub listeners with seq", async () => {
+    // Migration contract: hub fans out whatever the bound AgentSession emits.
+    const a = await hub.open({ cwd, fresh: true });
+    /** @type {{ type?: string }[]} */
+    const events = [];
+    /** @type {number[]} */
+    const seqs = [];
+    const unsub = hub.subscribe(a.id, (ev, seq) => {
+      events.push(/** @type {{ type?: string }} */ (ev));
+      seqs.push(seq);
+    });
+    const open = hub.require(a.id);
+    assert.equal(typeof open.session._emit, "function");
+    open.session._emit({
+      type: "message_start",
+      message: { role: "user", id: "u-nat", content: "hi" },
+    });
+    open.session._emit({ type: "agent_settled" });
+    unsub();
+    assert.deepEqual(
+      events.map((e) => e.type),
+      ["message_start", "agent_settled"],
+    );
+    assert.deepEqual(seqs, [1, 2]);
+    await hub.close(a.id);
+  });
+});
+
+describe("SessionHub attach (bound / live)", () => {
+  /** @type {SessionHub} */
+  let hub;
+  /** @type {string} */
+  let cwd;
+
+  before(() => {
+    cwd = mkdtempSync(join(tmpdir(), "pi-gui-attach-"));
+    hub = new SessionHub();
+  });
+
+  after(async () => {
+    await hub.disposeAll();
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("attach then close detaches without dispose", async () => {
+    const { createAgentSession, SessionManager } = await import(
+      "@earendil-works/pi-coding-agent"
+    );
+    const { session } = await createAgentSession({
+      cwd,
+      sessionManager: SessionManager.create(cwd),
+    });
+    let disposed = false;
+    const origDispose = session.dispose.bind(session);
+    session.dispose = () => {
+      disposed = true;
+      return origDispose();
+    };
+
+    const meta = hub.attach(session, { cwd });
+    assert.equal(meta.id, session.sessionId);
+    assert.equal(hub.listOpen().some((s) => s.id === meta.id), true);
+
+    /** @type {{ type?: string }[]} */
+    const events = [];
+    const unsub = hub.subscribe(meta.id, (ev) => {
+      events.push(/** @type {{ type?: string }} */ (ev));
+    });
+    session._emit({ type: "agent_settled" });
+    unsub();
+    assert.equal(events[0]?.type, "agent_settled");
+
+    await hub.close(meta.id);
+    assert.equal(disposed, false);
+    assert.equal(hub.listOpen().some((s) => s.id === meta.id), false);
+
+    session.dispose();
+    assert.equal(disposed, true);
+  });
+
+  it("attach same session twice is idempotent", async () => {
+    const { createAgentSession, SessionManager } = await import(
+      "@earendil-works/pi-coding-agent"
+    );
+    const { session } = await createAgentSession({
+      cwd,
+      sessionManager: SessionManager.create(cwd),
+    });
+    const a = hub.attach(session, { cwd });
+    const b = hub.attach(session, { cwd });
+    assert.equal(a.id, b.id);
+    assert.equal(hub.listOpen().filter((s) => s.id === a.id).length, 1);
+    hub.detach(a.id);
+    session.dispose();
+  });
+
+  it("disposeAll detaches bound without dispose", async () => {
+    const { createAgentSession, SessionManager } = await import(
+      "@earendil-works/pi-coding-agent"
+    );
+    const { session } = await createAgentSession({
+      cwd,
+      sessionManager: SessionManager.create(cwd),
+    });
+    let disposed = false;
+    const origDispose = session.dispose.bind(session);
+    session.dispose = () => {
+      disposed = true;
+      return origDispose();
+    };
+    hub.attach(session, { cwd });
+    await hub.disposeAll();
+    assert.equal(disposed, false);
+    session.dispose();
+  });
+});
+
+describe("createServer stayAlive + session-index", () => {
+  it("indexes session on subscribe", async () => {
+    const { ensureSessionIndex, getSessionById } = await import(
+      "./session-index.js"
+    );
+    ensureSessionIndex();
+    const { createAgentSession, SessionManager } = await import(
+      "@earendil-works/pi-coding-agent"
+    );
+    const cwd = mkdtempSync(join(tmpdir(), "pi-gui-idx-"));
+    try {
+      const { session } = await createAgentSession({
+        cwd,
+        sessionManager: SessionManager.create(cwd),
+      });
+      // subscribe is how InteractiveMode registers; index hooks that.
+      const unsub = session.subscribe(() => {});
+      assert.equal(getSessionById(session.sessionId), session);
+      unsub();
+      session.dispose();
+      assert.equal(getSessionById(session.sessionId), null);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("in-process listen and close without exit", async () => {
+    const { createServer } = await import("./http.js");
+    const app = createServer({ port: 0, stayAlive: true });
+    await new Promise((resolve, reject) => {
+      app.server.once("error", reject);
+      app.listen(() => resolve(undefined));
+    });
+    const { port } = /** @type {{ port: number }} */ (app.server.address());
+    const res = await fetch(`http://127.0.0.1:${port}/api/health`);
+    assert.equal(res.ok, true);
+    await app.close();
+    // second close should not throw hard (server already closed)
+    await app.close().catch(() => {});
+  });
 });

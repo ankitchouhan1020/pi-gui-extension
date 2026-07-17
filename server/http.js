@@ -16,6 +16,17 @@ import {
 } from "./sse-protocol.js";
 
 /**
+ * Host lifecycle for /api/shutdown (standalone exits; in-process stays alive).
+ * @type {{ stayAlive: boolean, close: null | (() => Promise<unknown>) }}
+ */
+const hostCtl = { stayAlive: false, close: null };
+
+/** @param {unknown} images */
+function hasImages(images) {
+  return Array.isArray(images) && images.length > 0;
+}
+
+/**
  * List subdirectories for the in-app folder browser (localhost only).
  * @param {string} [dirPath]
  */
@@ -341,12 +352,18 @@ async function handleApi(req, res) {
       });
     }
 
-    // POST /api/shutdown — localhost stop (extension /gui stop)
+    // POST /api/shutdown — stop HTTP host (standalone exits; in-process only closes)
     if (method === "POST" && pathname === "/api/shutdown") {
       json(res, 200, { ok: true });
       setTimeout(() => {
-        hub.disposeAll();
-        process.exit(0);
+        const done = hostCtl.close
+          ? hostCtl.close()
+          : Promise.resolve(hub.disposeAll());
+        Promise.resolve(done)
+          .catch(() => {})
+          .finally(() => {
+            if (!hostCtl.stayAlive) process.exit(0);
+          });
       }, 50);
       return;
     }
@@ -844,10 +861,13 @@ async function handleStatic(req, res) {
 }
 
 /**
- * @param {{ port?: number }} opts
+ * @param {{ port?: number; stayAlive?: boolean }} opts
+ * stayAlive: in-process /gui — close server without process.exit
  */
 export function createServer(opts = {}) {
   const port = opts.port ?? Number(process.env.PI_GUI_PORT || 3847);
+  const stayAlive = Boolean(opts.stayAlive);
+  hostCtl.stayAlive = stayAlive;
 
   const server = http.createServer((req, res) => {
     // Never let a handler kill the process
@@ -875,9 +895,10 @@ export function createServer(opts = {}) {
     console.error("[pi-gui] server error", err.message);
   });
 
-  return {
+  const api = {
     server,
     port,
+    stayAlive,
     /** @param {() => void} [cb] */
     listen(cb) {
       server.listen(port, "127.0.0.1", () => {
@@ -893,4 +914,6 @@ export function createServer(opts = {}) {
       });
     },
   };
+  hostCtl.close = () => api.close();
+  return api;
 }

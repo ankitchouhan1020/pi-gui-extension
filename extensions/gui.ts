@@ -1,27 +1,64 @@
 /**
- * Pi extension: /gui starts the localhost web UI; /gui stop shuts it down.
+ * Pi extension: /gui starts localhost web UI in-process and attaches the live session.
  *
  * Install: pi install /path/to/pi-gui
  * Or: pi -e ./extensions/gui.ts
  */
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { spawn, type ChildProcess } from "node:child_process";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import {
+  AgentSession,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import { spawn } from "node:child_process";
+import { createServer } from "../server/http.js";
+import { hub } from "../server/hub.js";
 
-function packageRoot(): string {
-  // extensions/gui.ts → package root
-  try {
-    return dirname(dirname(fileURLToPath(import.meta.url)));
-  } catch {
-    return process.cwd();
-  }
+/**
+ * Index live AgentSession by id. Must patch the same AgentSession class pi uses
+ * (import here via jiti aliases — not via server/session-index.js nested resolve).
+ */
+const sessionsById = new Map<string, InstanceType<typeof AgentSession>>();
+(function ensureSessionIndex() {
+  const proto = AgentSession.prototype as {
+    subscribe: (listener: (ev: unknown) => void) => () => void;
+    dispose: () => void;
+    sessionId?: string;
+  };
+  if ((proto.subscribe as { __piGui?: boolean }).__piGui) return;
+  const origSub = proto.subscribe;
+  proto.subscribe = function subscribeIndexed(this: { sessionId?: string }, listener) {
+    try {
+      if (this.sessionId) sessionsById.set(this.sessionId, this as InstanceType<typeof AgentSession>);
+    } catch {
+      /* ignore */
+    }
+    return origSub.call(this, listener);
+  };
+  (proto.subscribe as { __piGui?: boolean }).__piGui = true;
+  const origDispose = proto.dispose;
+  proto.dispose = function disposeIndexed(this: { sessionId?: string }) {
+    try {
+      if (this.sessionId) sessionsById.delete(this.sessionId);
+    } catch {
+      /* ignore */
+    }
+    return origDispose.call(this);
+  };
+})();
+
+function getSessionById(id: string) {
+  return sessionsById.get(id) ?? null;
 }
 
-let child: ChildProcess | null = null;
+/** @type {ReturnType<typeof createServer> | null} */
+let app: ReturnType<typeof createServer> | null = null;
+/** Hub id of the attached TUI session, if any. */
+let boundId: string | null = null;
+
 const DEFAULT_PORT = Number(process.env.PI_GUI_PORT || 3847);
 
-function parseArgs(raw?: string): { cmd: "start" | "stop"; port: number } {
+/** Exported for unit tests. */
+export function parseArgs(raw?: string): { cmd: "start" | "stop"; port: number } {
   const parts = (raw ?? "").trim().split(/\s+/).filter(Boolean);
   let cmd: "start" | "stop" = "start";
   let port = DEFAULT_PORT;
@@ -41,86 +78,59 @@ async function isUp(port: number): Promise<boolean> {
   }
 }
 
-function startServer(port: number): Promise<void> {
-  if (child && !child.killed) return Promise.resolve();
+function attachLive(ctx: ExtensionContext): { id: string } | null {
+  const id = ctx.sessionManager.getSessionId();
+  const session = getSessionById(id);
+  if (!session) return null;
+  const meta = hub.attach(session, { cwd: ctx.cwd });
+  boundId = meta.id;
+  return meta;
+}
 
-  const root = packageRoot();
-  const cli = join(root, "server", "cli.js");
+function detachLive(): void {
+  if (boundId) {
+    hub.detach(boundId);
+    boundId = null;
+  }
+}
 
-  return new Promise((resolve, reject) => {
-    child = spawn(process.execPath, [cli, "--port", String(port)], {
-      cwd: root,
-      env: { ...process.env, PI_GUI_PORT: String(port) },
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: false,
-    });
+async function startServer(port: number): Promise<void> {
+  if (app) return;
 
-    let settled = false;
-    const done = (err?: Error) => {
-      if (settled) return;
-      settled = true;
-      if (err) reject(err);
-      else resolve();
+  // Another process already serving this port — don't take over.
+  if (await isUp(port)) return;
+
+  const next = createServer({ port, stayAlive: true });
+  await new Promise<void>((resolve, reject) => {
+    const onErr = (err: Error) => {
+      next.server.off("error", onErr);
+      reject(err);
     };
-
-    child.stdout?.on("data", (buf) => {
-      const s = buf.toString();
-      if (s.includes("http://")) done();
+    next.server.once("error", onErr);
+    next.listen(() => {
+      next.server.off("error", onErr);
+      resolve();
     });
-    child.stderr?.on("data", (buf) => {
-      console.error("[pi-gui]", buf.toString());
-    });
-    child.on("error", (err) => done(err));
-    child.on("exit", (code) => {
-      child = null;
-      if (!settled) done(new Error(`pi-gui exited with code ${code}`));
-    });
-
-    // Fallback resolve after health checks
-    const start = Date.now();
-    const poll = setInterval(async () => {
-      if (await isUp(port)) {
-        clearInterval(poll);
-        done();
-      } else if (Date.now() - start > 8000) {
-        clearInterval(poll);
-        done(new Error("pi-gui failed to start within 8s"));
-      }
-    }, 200);
   });
+  app = next;
 }
 
 async function stopServer(port: number): Promise<"stopped" | "not_running"> {
-  // Prefer killing the child we spawned
-  if (child && !child.killed) {
-    const proc = child;
-    child = null;
-    await new Promise<void>((resolve) => {
-      const t = setTimeout(() => {
-        try {
-          proc.kill("SIGKILL");
-        } catch {
-          /* ignore */
-        }
-        resolve();
-      }, 2000);
-      proc.once("exit", () => {
-        clearTimeout(t);
-        resolve();
-      });
-      try {
-        proc.kill("SIGTERM");
-      } catch {
-        clearTimeout(t);
-        resolve();
-      }
-    });
+  if (app) {
+    detachLive();
+    const cur = app;
+    app = null;
+    try {
+      await cur.close();
+    } catch {
+      /* ignore */
+    }
     return "stopped";
   }
 
   if (!(await isUp(port))) return "not_running";
 
-  // Server started elsewhere (npm run dev:server) — ask it to exit
+  // Foreign/standalone server — ask it to exit
   try {
     await fetch(`http://127.0.0.1:${port}/api/shutdown`, { method: "POST" });
   } catch {
@@ -135,12 +145,25 @@ async function stopServer(port: number): Promise<"stopped" | "not_running"> {
   return (await isUp(port)) ? "not_running" : "stopped";
 }
 
+function openBrowser(url: string): void {
+  const openCmd =
+    process.platform === "darwin"
+      ? "open"
+      : process.platform === "win32"
+        ? "start"
+        : "xdg-open";
+  spawn(openCmd, [url], {
+    stdio: "ignore",
+    shell: process.platform === "win32",
+  });
+}
+
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("gui", {
-    description: "Open pi-gui web UI. Use /gui stop to shut it down.",
+    description: "Open pi-gui web UI (same process + live session). /gui stop to shut down.",
     handler: async (args, ctx) => {
       const { cmd, port } = parseArgs(args);
-      const url = `http://127.0.0.1:${port}`;
+      const base = `http://127.0.0.1:${port}`;
 
       try {
         if (cmd === "stop") {
@@ -153,23 +176,24 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
-        if (!(await isUp(port))) {
+        if (!app) {
+          if (await isUp(port)) {
+            // Foreign server already up — open browser, no live attach.
+            ctx.ui.notify(`pi-gui already running: ${base}`, "info");
+            openBrowser(base);
+            return;
+          }
           ctx.ui.notify("Starting pi-gui…", "info");
           await startServer(port);
         }
-        ctx.ui.notify(`pi-gui: ${url}`, "info");
 
-        // Best-effort open browser (macOS/linux)
-        const openCmd =
-          process.platform === "darwin"
-            ? "open"
-            : process.platform === "win32"
-              ? "start"
-              : "xdg-open";
-        spawn(openCmd, [url], {
-          stdio: "ignore",
-          shell: process.platform === "win32",
-        });
+        const meta = attachLive(ctx);
+        const url = meta ? `${base}/sessions/${encodeURIComponent(meta.id)}` : base;
+        ctx.ui.notify(
+          meta ? `pi-gui: ${url} (live session)` : `pi-gui: ${url}`,
+          "info",
+        );
+        openBrowser(url);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         ctx.ui.notify(`pi-gui failed: ${msg}`, "error");
@@ -177,10 +201,23 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.on("session_shutdown", async () => {
-    if (child && !child.killed) {
-      child.kill("SIGTERM");
-      child = null;
+  // Rebind when TUI replaces the session (/new, /resume, fork).
+  // Hub-owned sessions also load this extension with mode "rpc" — ignore those.
+  pi.on("session_start", (_event, ctx) => {
+    if (!app || ctx.mode !== "tui") return;
+    detachLive();
+    attachLive(ctx);
+  });
+
+  // Only tear down HTTP on full TUI quit — not on session replace/reload.
+  pi.on("session_shutdown", async (event, ctx) => {
+    if (ctx.mode !== "tui") return;
+    if (event.reason !== "quit") {
+      detachLive();
+      return;
+    }
+    if (app) {
+      await stopServer(app.port);
     }
   });
 }

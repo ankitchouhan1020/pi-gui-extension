@@ -14,7 +14,7 @@ Safe defaults. Documented hooks. Low merge pain.
 | App chrome components | `web/src/lib/components/*` | Layout, labels, palette entries, sidebar UI |
 | Theme / FOUC | `web/index.html`, kit `theme.svelte.ts`, CSS tokens | Storage key `agentic-ui-kit-theme` |
 | Client API helpers | `web/src/lib/api.ts` | Add wrappers for **existing** routes carefully |
-| pi `/gui` command UX | `extensions/gui.ts` | Args, port messaging — keep spawn contract |
+| pi `/gui` command UX | `extensions/gui.ts` | Args, port messaging — in-process listen + live attach |
 | Docs / README / AGENTS | `docs/`, root md | This tree |
 
 **Rule:** one feature → fewest files; prefer a plugin over editing `MessageBubble` deeply.
