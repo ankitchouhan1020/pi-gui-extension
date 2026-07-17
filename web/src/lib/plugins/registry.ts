@@ -1,11 +1,8 @@
 /**
  * GUI plugin registry — web analogue of pi-tui custom components.
  *
- * Plugins can register:
- *  - message renderers by role (or customType)
- *  - sidebar slots
- *
- * See docs/extend/plugins.md for how to extend.
+ * Plugins register message renderers by role / customType.
+ * See docs/extend/plugins.md.
  */
 import type { Component } from "svelte";
 import type { ChatMessage } from "$lib/api";

@@ -19,8 +19,8 @@ Do **not** load every doc for a small UI change.
 ## Layout
 
 ```text
-extensions/gui.ts     # pi: /gui
-server/               # cli, http (REST+SSE), hub, sse-protocol
+extensions/gui.ts     # pi: /gui (in-process + live attach)
+server/               # cli, http, hub, sse-protocol, session-index
 web/src/lib/
   api.ts · chat-stream.ts · plugins/ · components/ · kit/
 dist/                 # production UI (npm run build)

@@ -208,7 +208,7 @@
         upsertSession(row);
         setSessionUrl(row.id, urlMode);
       }
-      // Re-list so sidebar Open/Recent and palette match hub (id may change on resume)
+      // Re-list so sidebar Active/Recent and palette match hub (id may change on resume)
       await refresh();
       // List can miss the open hub session (path/id mismatch) — keep local truth
       if (selected) upsertSession({ ...selected, running: true });

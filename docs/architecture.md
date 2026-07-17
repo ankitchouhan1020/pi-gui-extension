@@ -44,7 +44,10 @@ flowchart TB
     CLI[cli.js]
     HTTP[http.js<br/>REST + SSE]
     Hub[hub.js<br/>SessionHub]
+    ExtGui[extensions/gui.ts<br/>/gui attach]
     CLI --> HTTP --> Hub
+    ExtGui --> HTTP
+    ExtGui --> Hub
   end
 
   subgraph SDK_layer["pi SDK"]
@@ -86,10 +89,12 @@ sequenceDiagram
 |---------|----------|
 | Identity | Prefer **hub id** after open; `ensure` reopens by disk id/path |
 | Multi-session | Many open; **per-session** turn queues; activate mutex only for `session_start` |
+| Live TUI attach | `/gui` indexes `AgentSession` (extension patch) → `hub.attach` / `detach` |
 | Transport | REST for commands; **SSE** for stream; no WebSocket |
 | Client truth | `ChatStream`: seq gate + snapshot barrier + id merge |
 | SSE resume | Cold/gap → REST snapshot; hot → ring `seq > after` + live |
-| Process entry | `pi-gui` / `cli.js` (standalone host), or pi **`/gui`** (in-process + live attach) |
+| Idle | `PI_GUI_SESSION_IDLE_MS` closes sessions with no SSE clients (`0` = off) |
+| Process entry | `pi-gui` / `cli.js` (standalone), or pi **`/gui`** (in-process + live attach) |
 
 ## Chat stream pipeline (contract)
 

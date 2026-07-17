@@ -11,10 +11,10 @@ Safe defaults. Documented hooks. Low merge pain.
 | Area | Path | Notes |
 |------|------|--------|
 | Message plugins | `web/src/lib/plugins/` | `registerPlugin` / `match` / custom `Message` |
-| App chrome components | `web/src/lib/components/*` | Layout, labels, palette entries, sidebar UI |
+| Presentation chrome | labels, spacing, copy in `components/*` | No stream/session protocol changes |
 | Theme / FOUC | `web/index.html`, kit `theme.svelte.ts`, CSS tokens | Storage key `agentic-ui-kit-theme` |
-| Client API helpers | `web/src/lib/api.ts` | Add wrappers for **existing** routes carefully |
-| pi `/gui` command UX | `extensions/gui.ts` | Args, port messaging — in-process listen + live attach |
+| Client API helpers | `web/src/lib/api.ts` | Wrappers for **existing** routes only |
+| pi `/gui` UX | `extensions/gui.ts` | Args, port messaging — in-process + live attach |
 | Docs / README / AGENTS | `docs/`, root md | This tree |
 
 **Rule:** one feature → fewest files; prefer a plugin over editing `MessageBubble` deeply.
@@ -27,7 +27,7 @@ Works, but couples you to internals. Read architecture + the file fully first. K
 |------|------|------|
 | New REST surface | `server/http.js` + hub method + `api.ts` + UI | Must stay localhost; no new frameworks |
 | Command palette actions | `CommandPalette.svelte` | Large file; add one command block, don’t restructure |
-| Chat chrome / composer | `ChatPanel.svelte` | Streaming UX; easy to break optimistic UI |
+| Chat chrome / composer | `ChatPanel.svelte`, `ComposerPlus.svelte` | Streaming UX; easy to break optimistic UI |
 | Session list / routing | `SessionList.svelte`, `App.svelte` | Deep links and open/recent semantics |
 | Kit components you already use | `web/src/lib/kit/**` (vendored) | Treat as library; fork one component only if needed |
 | Build entry | `web/vite.config.ts`, `server/cli.js` | Breaks install/dev if wrong |

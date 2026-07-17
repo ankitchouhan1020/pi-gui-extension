@@ -44,11 +44,14 @@
 
   const FOLDER_ORDER_KEY = "pi-gui-sidebar-folder-order";
   const SESSION_ORDER_KEY = "pi-gui-sidebar-session-order";
+  /** Demoted from Active → Recent (not hidden). Legacy key name kept. */
   const ARCHIVED_KEY = "pi-gui-sidebar-archived";
   const WIDTH_KEY = "pi-gui-sidebar-width";
   const WIDTH_MIN = 200;
   const WIDTH_MAX = 480;
   const WIDTH_DEFAULT = 320;
+  const ACTIVE_MS = 24 * 60 * 60 * 1000;
+  const RECENT_PAGE = 5;
 
   function clampWidth(n: number) {
     return Math.min(WIDTH_MAX, Math.max(WIDTH_MIN, Math.round(n)));
@@ -113,7 +116,10 @@
 
   let folderOrder = $state<string[]>(loadJson(FOLDER_ORDER_KEY, []));
   let sessionOrder = $state<string[]>(loadJson(SESSION_ORDER_KEY, []));
-  let archived = $state(new Set<string>(loadJson<string[]>(ARCHIVED_KEY, [])));
+  /** User moved these out of Active into Recent (still visible). */
+  let demoted = $state(new Set<string>(loadJson<string[]>(ARCHIVED_KEY, [])));
+  /** How many Recent rows to show (grows by RECENT_PAGE via Show more). */
+  let recentShown = $state(RECENT_PAGE);
 
   type Drag =
     | { kind: "folder"; key: string }
@@ -135,36 +141,37 @@
     return s.path || s.id;
   }
 
-  function archiveKeys(s: SessionRow): string[] {
+  function demoteKeys(s: SessionRow): string[] {
     return [...new Set([sk(s), s.path, s.id].filter(Boolean) as string[])];
   }
 
-  function isArchived(s: SessionRow) {
-    return archiveKeys(s).some((k) => archived.has(k));
+  function isDemoted(s: SessionRow) {
+    return demoteKeys(s).some((k) => demoted.has(k));
   }
 
-  function archiveSession(s: SessionRow, e: MouseEvent) {
+  /** Move from Active → Recent (still listed; not hidden). */
+  function moveToRecent(s: SessionRow, e: MouseEvent) {
     e.stopPropagation();
-    const next = new Set(archived);
+    const next = new Set(demoted);
     next.add(sk(s));
-    archived = next;
+    demoted = next;
     saveJson(ARCHIVED_KEY, [...next]);
   }
 
-  /** Resume / focus clears archive so the session reappears in the sidebar. */
-  function unarchiveSession(s: SessionRow) {
-    const next = new Set(archived);
+  /** Opening a session clears demotion so it can sit in Active again if eligible. */
+  function clearDemotion(s: SessionRow) {
+    const next = new Set(demoted);
     let hit = false;
-    for (const k of archiveKeys(s)) {
+    for (const k of demoteKeys(s)) {
       if (next.delete(k)) hit = true;
     }
     if (!hit) return;
-    archived = next;
+    demoted = next;
     saveJson(ARCHIVED_KEY, [...next]);
   }
 
   function selectSession(s: SessionRow) {
-    unarchiveSession(s);
+    clearDemotion(s);
     onSelect(s);
   }
 
@@ -174,23 +181,44 @@
     const s = sessions.find(
       (x) => x.id === selectedId || x.path === selectedId,
     );
-    if (s && isArchived(s)) unarchiveSession(s);
+    if (s && isDemoted(s)) clearDemotion(s);
   });
 
-  /** Open (hub) only — past disk sessions stay in Recent until resumed. */
-  const RECENT = 8;
-  const openSessions = $derived(
-    sessions.filter((s) => s.running && !isArchived(s)),
-  );
-  const pastSessions = $derived.by(() => {
-    const out: SessionRow[] = [];
-    for (const s of sessions) {
-      if (s.running || isArchived(s)) continue;
-      out.push(s);
-      if (out.length >= RECENT) break;
+  function activityMs(s: SessionRow): number {
+    if (s.modified) {
+      const t = new Date(s.modified).getTime();
+      if (Number.isFinite(t)) return t;
     }
+    if (s.created) {
+      const t = new Date(s.created).getTime();
+      if (Number.isFinite(t)) return t;
+    }
+    // Hub-open with no timestamps — treat as active now
+    return s.running ? Date.now() : 0;
+  }
+
+  /** Active: hub-running or activity within 24h, unless user moved to Recent. */
+  function isActive(s: SessionRow): boolean {
+    if (isDemoted(s)) return false;
+    if (s.running) return true;
+    const t = activityMs(s);
+    return t > 0 && Date.now() - t < ACTIVE_MS;
+  }
+
+  const openSessions = $derived(sessions.filter(isActive));
+
+  const pastSessionsAll = $derived.by(() => {
+    const out = sessions.filter((s) => !isActive(s));
+    out.sort((a, b) => activityMs(b) - activityMs(a));
     return out;
   });
+
+  const pastSessions = $derived(pastSessionsAll.slice(0, recentShown));
+  const recentHasMore = $derived(pastSessionsAll.length > recentShown);
+
+  function showMoreRecent() {
+    recentShown += RECENT_PAGE;
+  }
 
   function label(s: SessionRow) {
     if (s.name) return s.name;
@@ -346,12 +374,12 @@
 
       <Separator class="my-1.5" />
       <div class="px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        Sessions
+        Active
       </div>
 
       {#if openSessions.length === 0}
         <div class="px-2 py-6 text-center text-xs text-muted-foreground">
-          {listReady ? "No open sessions" : "Loading…"}
+          {listReady ? "No active sessions" : "Loading…"}
         </div>
       {:else}
         {#each groups as g (g.key)}
@@ -446,9 +474,9 @@
                       <button
                         type="button"
                         class="mr-0.5 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 hover:bg-muted hover:text-foreground group-hover/item:opacity-100 focus-visible:opacity-100"
-                        title="Archive (hide from sidebar)"
-                        aria-label="Archive session"
-                        onclick={(e) => archiveSession(s, e)}
+                        title="Move to Recent"
+                        aria-label="Move to Recent"
+                        onclick={(e) => moveToRecent(s, e)}
                       >
                         <Archive class="size-3.5" />
                       </button>
@@ -461,7 +489,7 @@
         {/each}
       {/if}
 
-      {#if pastSessions.length > 0}
+      {#if pastSessionsAll.length > 0}
         {@const recentOpen = isOpen("__recent__")}
         <Separator class="my-2" />
         <button
@@ -494,19 +522,19 @@
                       {label(s)}
                     </span>
                   </button>
-                  <button
-                    type="button"
-                    class="mr-0.5 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 hover:bg-muted hover:text-foreground group-hover/item:opacity-100 focus-visible:opacity-100"
-                    title="Archive (hide from sidebar)"
-                    aria-label="Archive session"
-                    onclick={(e) => archiveSession(s, e)}
-                  >
-                    <Archive class="size-3.5" />
-                  </button>
                 </div>
               </li>
             {/each}
           </ul>
+          {#if recentHasMore}
+            <button
+              type="button"
+              class="mt-1 ml-3 w-[calc(100%-0.75rem)] rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/80 hover:text-foreground"
+              onclick={showMoreRecent}
+            >
+              Show more
+            </button>
+          {/if}
         {/if}
       {/if}
     </div>

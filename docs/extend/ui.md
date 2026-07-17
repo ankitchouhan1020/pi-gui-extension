@@ -18,6 +18,9 @@ Useful: `Message`, `Markdown`, `Reasoning`, `Button`, `ThemeToggle`, scroll area
 | `StatusBar.svelte` / `ModelPicker.svelte` | model / think / tokens | local UI |
 | `GitDiffSidebar.svelte` | workspace diffs | feature-local |
 | `ToolCallCard.svelte` | tool call/result card | presentation |
+| `ComposerPlus.svelte` | composer + menu (images, …) | presentation |
+| `FolderPicker.svelte` | cwd browser (`/api/fs`) | local UI |
+| `LinkifiedPre.svelte` | path-linkified pre blocks | presentation |
 
 ## Conventions
 
