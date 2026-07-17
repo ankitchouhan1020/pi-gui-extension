@@ -10,4 +10,4 @@ git push && git push --tags
 
 `prepublishOnly` rebuilds `dist/` before publish.
 
-Install: `pi install npm:pi-gui`
+Install: `pi install npm:pi-gui-extension`

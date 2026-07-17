@@ -1,12 +1,13 @@
 {
-  "name": "pi-gui",
+  "name": "pi-gui-extension",
   "version": "0.1.1",
   "description": "Localhost web UI for pi — multi-session chat over the same coding-agent SDK as the terminal.",
   "type": "module",
   "license": "MIT",
   "author": "Ankit Chouhan (https://github.com/ankitchouhan1020)",
   "bin": {
-    "pi-gui": "./server/cli.js"
+    "pi-gui": "./server/cli.js",
+    "pi-gui-extension": "./server/cli.js"
   },
   "repository": {
     "type": "git",
@@ -21,6 +22,7 @@
     "pi",
     "pi-extension",
     "pi-gui",
+    "pi-gui-extension",
     "gui",
     "web-ui",
     "agent",

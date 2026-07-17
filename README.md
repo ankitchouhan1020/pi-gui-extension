@@ -11,7 +11,7 @@ Use it when you want a browser for sessions, streaming, tools, and models withou
 ## Install
 
 ```bash
-pi install npm:pi-gui
+pi install npm:pi-gui-extension
 ```
 
 Maintainers: [docs/release.md](./docs/release.md) (manual `npm publish`).
@@ -20,11 +20,11 @@ Alternatives:
 
 ```bash
 pi install https://github.com/ankitchouhan1020/pi-gui-extension
-pi install /path/to/pi-gui   # local checkout (dist/ committed)
+pi install /path/to/pi-gui-extension   # local checkout (dist/ committed)
 ```
 
 ```bash
-pi remove npm:pi-gui
+pi remove npm:pi-gui-extension
 ```
 
 Inside any pi session:
@@ -38,14 +38,14 @@ Inside any pi session:
 ### Standalone
 
 ```bash
-npx pi-gui
+npx pi-gui-extension
 # → http://127.0.0.1:3847
 ```
 
 ```bash
-PI_GUI_PORT=4000 npx pi-gui
+PI_GUI_PORT=4000 npx pi-gui-extension
 # or
-npx pi-gui --port 4000
+npx pi-gui-extension --port 4000
 ```
 
 ### Development (hot reload)
