@@ -50,10 +50,7 @@
     "start": "node server/cli.js",
     "check": "npm run check --prefix web",
     "test": "node --test server/stabilize.test.js server/sse-protocol.test.js && node --experimental-strip-types --test web/src/lib/chat-stream.test.ts",
-    "prepublishOnly": "npm install --prefix web && npm run build",
-    "release:patch": "npm version patch -m \"Release %s\" && git push && git push --tags",
-    "release:minor": "npm version minor -m \"Release %s\" && git push && git push --tags",
-    "release:major": "npm version major -m \"Release %s\" && git push && git push --tags"
+    "prepublishOnly": "npm install --prefix web && npm run build"
   },
   "pi": {
     "extensions": ["./extensions"]
