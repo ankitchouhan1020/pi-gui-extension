@@ -1053,6 +1053,35 @@
   /** Home / empty chat: centered prompt (Cursor-style). */
   const isHome = $derived(messages.length === 0 && !busy && !sending);
 
+  /** Thinking + tool cards: expanded by default; header toggles all. */
+  let foldOpen = $state(true);
+  let foldEpoch = $state(0);
+  function toggleFoldAll() {
+    foldOpen = !foldOpen;
+    foldEpoch += 1;
+  }
+
+  /**
+   * Group into turns (user → until next user) so each user prompt can stick
+   * while that turn's assistant/tool output scrolls.
+   */
+  const messageTurns = $derived.by(() => {
+    const slice = messages.slice(hiddenMsgCount);
+    type Turn = { startIndex: number; items: { m: ChatMsg; i: number }[] };
+    const turns: Turn[] = [];
+    let cur: Turn | null = null;
+    for (let j = 0; j < slice.length; j++) {
+      const i = j + hiddenMsgCount;
+      const m = slice[j]!;
+      if (m.role === "user" || !cur) {
+        cur = { startIndex: i, items: [] };
+        turns.push(cur);
+      }
+      cur.items.push({ m, i });
+    }
+    return turns;
+  });
+
   const promptBoxClass = $derived(
     `border-black/[0.08] bg-white shadow-sm dark:border-white/10 dark:bg-zinc-900 ${
       bashMode ? "ring-1 ring-amber-500/50" : ""
@@ -1064,7 +1093,7 @@
   {#if isHome}
     {#if showExpandSidebar || showExpandGit}
       <header
-        class="flex h-11 shrink-0 items-center gap-1 border-b border-black/[0.06] bg-[#f4f4f5] px-2 dark:border-white/10 dark:bg-[hsl(240_6%_8%)]"
+        class="flex h-11 shrink-0 items-center gap-1 border-b border-black/[0.06] bg-[var(--pi-canvas)] px-2 dark:border-white/10"
       >
         {#if showExpandSidebar && onExpandSidebar}
           <button
@@ -1217,6 +1246,8 @@
         {showExpandGit}
         {onExpandSidebar}
         {onExpandGit}
+        {foldOpen}
+        onToggleFold={toggleFoldAll}
       />
     {/if}
 
@@ -1236,29 +1267,35 @@
               Show earlier {hiddenMsgCount} messages
             </button>
           {/if}
-          {#each messages.slice(hiddenMsgCount) as m, j (messageKey(m, j + hiddenMsgCount))}
-            {@const i = j + hiddenMsgCount}
-            {#if m.role === "toolResult" && isPairedToolResult(messages, i)}
-              <!-- result folded into matching tool call card -->
-            {:else}
-              {@const isLiveAssistant =
-                busy &&
-                m.role === "assistant" &&
-                !messages
-                  .slice(i + 1)
-                  .some((x) => x.role === "assistant" || x.role === "user")}
-              {@const isLiveBash =
-                busy &&
-                m.role === "bashExecution" &&
-                i === messages.length - 1}
-              <MessageBubble
-                message={m}
-                messages={messages}
-                index={i}
-                streaming={isLiveAssistant || isLiveBash}
-                onEditUser={editUserMessage}
-              />
-            {/if}
+          {#each messageTurns as turn, ti (turn.startIndex)}
+            <div class="flex flex-col gap-5">
+              {#each turn.items as { m, i } (messageKey(m, i))}
+                {#if m.role === "toolResult" && isPairedToolResult(messages, i)}
+                  <!-- result folded into matching tool call card -->
+                {:else}
+                  {@const isLiveAssistant =
+                    busy &&
+                    m.role === "assistant" &&
+                    !messages
+                      .slice(i + 1)
+                      .some((x) => x.role === "assistant" || x.role === "user")}
+                  {@const isLiveBash =
+                    busy &&
+                    m.role === "bashExecution" &&
+                    i === messages.length - 1}
+                  <MessageBubble
+                    message={m}
+                    messages={messages}
+                    index={i}
+                    streaming={isLiveAssistant || isLiveBash}
+                    onEditUser={editUserMessage}
+                    {foldOpen}
+                    {foldEpoch}
+                    sticky={m.role === "user"}
+                  />
+                {/if}
+              {/each}
+            </div>
           {/each}
           {#if queueSteer.length || queueFollowUp.length}
             <div class="rounded-md border border-dashed border-border/80 px-3 py-2 text-[12px] text-muted-foreground">
@@ -1399,17 +1436,13 @@
 
 <style>
   .chat-canvas {
-    background: #f4f4f5;
+    background: var(--pi-canvas);
     color: hsl(240 10% 3.9%);
   }
   :global(html.dark) .chat-canvas {
-    background: hsl(240 6% 8%);
     color: hsl(0 0% 98%);
   }
   .chat-footer {
-    background: color-mix(in oklab, #f4f4f5 92%, white);
-  }
-  :global(html.dark) .chat-footer {
-    background: hsl(240 6% 9%);
+    background: var(--pi-canvas-footer);
   }
 </style>

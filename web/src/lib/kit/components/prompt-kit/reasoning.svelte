@@ -18,8 +18,8 @@
 		isStreaming = false,
 	}: Props = $props();
 
-	let internalOpen = $state(false);
-	let wasAutoOpened = $state(false);
+	// Default expanded (thinking stays open after stream ends).
+	let internalOpen = $state(true);
 
 	const isControlled = $derived(open !== undefined);
 	const isOpen = $derived(isControlled ? (open as boolean) : internalOpen);
@@ -33,20 +33,10 @@
 		onOpenChange?.(newOpen);
 	}
 
-	// Auto-open while streaming (uncontrolled only — matches React; controlled uses open prop).
+	// Auto-open while streaming if the user had collapsed it (uncontrolled only).
 	$effect(() => {
-		if (isStreaming && !wasAutoOpened) {
-			if (!isControlled) {
-				internalOpen = true;
-			}
-			wasAutoOpened = true;
-		}
-
-		if (!isStreaming && wasAutoOpened) {
-			if (!isControlled) {
-				internalOpen = false;
-			}
-			wasAutoOpened = false;
+		if (isStreaming && !isControlled && !internalOpen) {
+			internalOpen = true;
 		}
 	});
 

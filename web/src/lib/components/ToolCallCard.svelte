@@ -9,8 +9,10 @@
     args?: string;
     result?: string;
     status?: Status;
-    /** Expand args/result by default (rare). */
+    /** Initial / bulk expand state (default open). */
     open?: boolean;
+    /** Bump to force open ← bulk expand/collapse all. */
+    foldEpoch?: number;
     /** Max lines of result before "show more". */
     maxResultLines?: number;
   };
@@ -20,9 +22,17 @@
     args = "",
     result = "",
     status = "done",
-    open = false,
+    open = true,
+    foldEpoch = 0,
     maxResultLines = 20,
   }: Props = $props();
+
+  let localOpen = $state(true);
+
+  $effect(() => {
+    void foldEpoch;
+    localOpen = open;
+  });
 
   const chip = $derived(
     status === "running"
@@ -49,7 +59,7 @@
 
 <details
   class="group/tool w-full min-w-0 max-w-full rounded-lg border border-border/70 bg-muted/30 open:bg-muted/40"
-  open={open || undefined}
+  bind:open={localOpen}
 >
   <summary
     class="flex cursor-pointer list-none items-center gap-2 px-2.5 py-1.5 text-[12px] leading-none select-none [&::-webkit-details-marker]:hidden"

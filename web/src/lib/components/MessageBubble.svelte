@@ -29,6 +29,11 @@
     index?: number;
     /** Edit user msg → navigate tree + draft (ChatPanel). */
     onEditUser?: (message: ChatMessage) => void;
+    /** Bulk expand/collapse for thinking + tools (default open). */
+    foldOpen?: boolean;
+    foldEpoch?: number;
+    /** Pin under chat header while this turn's reply scrolls. */
+    sticky?: boolean;
   };
   let {
     message,
@@ -36,7 +41,28 @@
     messages = [],
     index = -1,
     onEditUser,
+    foldOpen = true,
+    foldEpoch = 0,
+    sticky = false,
   }: Props = $props();
+
+  // Per-block open state; bulk toggle resets via foldEpoch.
+  let orphanOpen = $state(true);
+  let thinkOpen = $state<Record<number, boolean>>({});
+
+  $effect(() => {
+    void foldEpoch;
+    orphanOpen = foldOpen;
+    thinkOpen = {};
+  });
+
+  function thinkIsOpen(i: number): boolean {
+    return thinkOpen[i] ?? foldOpen;
+  }
+
+  function setThinkOpen(i: number, v: boolean) {
+    thinkOpen = { ...thinkOpen, [i]: v };
+  }
 
   const plugin = $derived(findMessagePlugin(message));
   const role = $derived(message.role || "unknown");
@@ -246,46 +272,46 @@
     e.stopPropagation();
     onEditUser?.(message);
   }
+
+  const showActions = $derived(Boolean(text.trim() || (isUser && onEditUser)));
 </script>
 
-<div class="group/msg relative">
-  {#if text.trim() || isUser}
-    <div
-      class="pointer-events-none absolute top-0 z-10 flex gap-0.5 opacity-0 transition-opacity group-hover/msg:pointer-events-auto group-hover/msg:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100 {isUser
-        ? 'left-0'
-        : 'right-0'}"
+{#snippet msgActions()}
+  {#if isUser && onEditUser}
+    <Button
+      variant="ghost"
+      size="icon"
+      type="button"
+      class="size-7"
+      title="Edit & continue"
+      onclick={editUser}
     >
-      {#if isUser && onEditUser}
-        <Button
-          variant="ghost"
-          size="icon"
-          type="button"
-          class="size-7"
-          title="Edit & continue"
-          onclick={editUser}
-        >
-          <Pencil class="size-3.5 text-muted-foreground" />
-        </Button>
-      {/if}
-      {#if text.trim()}
-        <Button
-          variant="ghost"
-          size="icon"
-          type="button"
-          class="size-7"
-          title="Copy message"
-          onclick={copyMessage}
-        >
-          {#if copied}
-            <Check class="size-3.5 text-muted-foreground" />
-          {:else}
-            <Copy class="size-3.5 text-muted-foreground" />
-          {/if}
-        </Button>
-      {/if}
-    </div>
+      <Pencil class="size-3.5 text-muted-foreground" />
+    </Button>
   {/if}
+  {#if text.trim()}
+    <Button
+      variant="ghost"
+      size="icon"
+      type="button"
+      class="size-7"
+      title="Copy message"
+      onclick={copyMessage}
+    >
+      {#if copied}
+        <Check class="size-3.5 text-muted-foreground" />
+      {:else}
+        <Copy class="size-3.5 text-muted-foreground" />
+      {/if}
+    </Button>
+  {/if}
+{/snippet}
 
+<div
+  class="group/msg relative {sticky
+    ? 'sticky top-0 z-20 bg-[var(--pi-canvas)] py-1'
+    : ''}"
+>
   {#if plugin?.Message}
     {@const Comp = plugin.Message}
     <Comp message={message} text={text} />
@@ -301,7 +327,8 @@
             : typeof message.exitCode === "number" && message.exitCode !== 0
               ? "error"
               : "done"}
-        open={streaming || Boolean(message.output)}
+        open={foldOpen}
+        {foldEpoch}
       />
     </Message>
   {:else if role === "toolResult"}
@@ -311,6 +338,8 @@
         name={typeof message.toolName === "string" ? message.toolName : "tool"}
         result={text || "—"}
         status={message.isError ? "error" : "done"}
+        open={foldOpen}
+        {foldEpoch}
       />
     </Message>
   {:else if special}
@@ -338,99 +367,134 @@
           {/if}
         {/each}
         {#if text.trim() || typeof message.content === "string"}
-          <MessageContent
-            variant="card"
-            class="max-w-full"
-            content={text || (typeof message.content === "string" ? message.content : "")}
-          />
+          <!--
+            Icons sit in-flow left of the bubble (same row, top-aligned).
+            Avoid absolute + overflow — sticky max-height was clipping them.
+          -->
+          <div class="flex max-w-full items-start gap-0.5">
+            {#if showActions}
+              <div
+                class="mt-1 flex shrink-0 gap-0.5 opacity-0 transition-opacity group-hover/msg:opacity-100 focus-within:opacity-100"
+              >
+                {@render msgActions()}
+              </div>
+            {/if}
+            <div class="min-w-0 max-w-full {sticky ? 'max-h-[40vh] overflow-y-auto' : ''}">
+              <MessageContent
+                variant="card"
+                class="max-w-full"
+                content={text || (typeof message.content === "string" ? message.content : "")}
+              />
+            </div>
+          </div>
         {/if}
       </div>
     </Message>
   {:else if isAssistant}
     <Message class="justify-start">
-      <div class="flex min-w-0 w-full max-w-full flex-col gap-2 pr-8">
-        {#if orphanThinking}
-          {@const live = orphanThinkingLive}
-          <Reasoning isStreaming={live} class="w-full min-w-0">
-            <ReasoningTrigger class="text-xs text-muted-foreground">
-              {thinkTriggerLabel(live)}
-            </ReasoningTrigger>
-            <ReasoningContent
-              class="w-full"
-              contentClassName="max-w-none w-full"
-              markdown={true}
-              content={orphanThinking}
-              streaming={live}
-              streamId={`${msgStreamId}-think-orphan`}
-            />
-          </Reasoning>
-        {/if}
-
-        {#each parts as p, i (`${p.type}-${p.id ?? p.name ?? i}`)}
-          {#if isThinkPart(p)}
-            {@const body = partThinkingText(p)}
-            {#if body.trim()}
-              {@const live = isThinkingLive(i)}
-              <Reasoning isStreaming={live} class="w-full min-w-0">
-                <ReasoningTrigger class="text-xs text-muted-foreground">
-                  {thinkTriggerLabel(live)}
-                </ReasoningTrigger>
-                <ReasoningContent
-                  class="w-full"
-                  contentClassName="max-w-none w-full"
-                  markdown={true}
-                  content={body}
-                  streaming={live}
-                  streamId={`${msgStreamId}-think-${i}`}
-                />
-              </Reasoning>
-            {/if}
-          {:else if p.type === "toolCall" || p.type === "tool_use"}
-            <ToolCallCard
-              name={p.name ?? "tool"}
-              args={toolArgs(p)}
-              result={pairedResult(p)}
-              status={toolStatus(p, i)}
-            />
-          {:else if p.type === "text" || p.text}
-            {#if (p.text ?? "").length > 0}
-              <div class="relative min-w-0">
-                <MessageContent
-                  variant="plain"
-                  markdown={true}
-                  content={p.text ?? ""}
-                  {streaming}
-                  streamId={`${msgStreamId}-t${p.id ?? i}`}
-                />
-                {#if streaming && i === lastTextIdx}
-                  <span
-                    class="ml-0.5 inline-block h-[0.9em] w-[2px] translate-y-[0.1em] animate-pulse bg-foreground/70 align-baseline"
-                    aria-hidden="true"
-                  ></span>
-                {/if}
-              </div>
-            {/if}
-          {/if}
-        {/each}
-
-        {#if parts.length === 0 && text && !orphanThinking}
-          <div class="relative min-w-0">
-            <MessageContent
-              variant="plain"
-              markdown={true}
-              content={text}
-              {streaming}
-              streamId={`${msgStreamId}-body`}
-            />
-            {#if streaming && text.length > 0}
-              <span
-                class="ml-0.5 inline-block h-[0.9em] w-[2px] translate-y-[0.1em] animate-pulse bg-foreground/70 align-baseline"
-                aria-hidden="true"
-              ></span>
-            {/if}
+      <div class="relative min-w-0 w-full max-w-full">
+        {#if showActions}
+          <div
+            class="absolute top-0 right-0 z-10 flex gap-0.5 opacity-0 transition-opacity group-hover/msg:opacity-100 focus-within:opacity-100"
+          >
+            {@render msgActions()}
           </div>
         {/if}
-        <!-- No text yet: "Working" spinner only — no empty cursor caret -->
+        <div class="flex min-w-0 w-full flex-col gap-2 {showActions ? 'pr-8' : ''}">
+          {#if orphanThinking}
+            {@const live = orphanThinkingLive}
+            <Reasoning
+              isStreaming={live}
+              bind:open={orphanOpen}
+              class="w-full min-w-0"
+            >
+              <ReasoningTrigger class="text-xs text-muted-foreground">
+                {thinkTriggerLabel(live)}
+              </ReasoningTrigger>
+              <ReasoningContent
+                class="w-full"
+                contentClassName="max-w-none w-full"
+                markdown={true}
+                content={orphanThinking}
+                streaming={live}
+                streamId={`${msgStreamId}-think-orphan`}
+              />
+            </Reasoning>
+          {/if}
+
+          {#each parts as p, i (`${p.type}-${p.id ?? p.name ?? i}`)}
+            {#if isThinkPart(p)}
+              {@const body = partThinkingText(p)}
+              {#if body.trim()}
+                {@const live = isThinkingLive(i)}
+                <Reasoning
+                  isStreaming={live}
+                  open={thinkIsOpen(i)}
+                  onOpenChange={(v) => setThinkOpen(i, v)}
+                  class="w-full min-w-0"
+                >
+                  <ReasoningTrigger class="text-xs text-muted-foreground">
+                    {thinkTriggerLabel(live)}
+                  </ReasoningTrigger>
+                  <ReasoningContent
+                    class="w-full"
+                    contentClassName="max-w-none w-full"
+                    markdown={true}
+                    content={body}
+                    streaming={live}
+                    streamId={`${msgStreamId}-think-${i}`}
+                  />
+                </Reasoning>
+              {/if}
+            {:else if p.type === "toolCall" || p.type === "tool_use"}
+              <ToolCallCard
+                name={p.name ?? "tool"}
+                args={toolArgs(p)}
+                result={pairedResult(p)}
+                status={toolStatus(p, i)}
+                open={foldOpen}
+                {foldEpoch}
+              />
+            {:else if p.type === "text" || p.text}
+              {#if (p.text ?? "").length > 0}
+                <div class="relative min-w-0">
+                  <MessageContent
+                    variant="plain"
+                    markdown={true}
+                    content={p.text ?? ""}
+                    {streaming}
+                    streamId={`${msgStreamId}-t${p.id ?? i}`}
+                  />
+                  {#if streaming && i === lastTextIdx}
+                    <span
+                      class="ml-0.5 inline-block h-[0.9em] w-[2px] translate-y-[0.1em] animate-pulse bg-foreground/70 align-baseline"
+                      aria-hidden="true"
+                    ></span>
+                  {/if}
+                </div>
+              {/if}
+            {/if}
+          {/each}
+
+          {#if parts.length === 0 && text && !orphanThinking}
+            <div class="relative min-w-0">
+              <MessageContent
+                variant="plain"
+                markdown={true}
+                content={text}
+                {streaming}
+                streamId={`${msgStreamId}-body`}
+              />
+              {#if streaming && text.length > 0}
+                <span
+                  class="ml-0.5 inline-block h-[0.9em] w-[2px] translate-y-[0.1em] animate-pulse bg-foreground/70 align-baseline"
+                  aria-hidden="true"
+                ></span>
+              {/if}
+            </div>
+          {/if}
+          <!-- No text yet: "Working" spinner only — no empty cursor caret -->
+        </div>
       </div>
     </Message>
   {:else}

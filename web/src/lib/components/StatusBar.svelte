@@ -7,6 +7,8 @@
   import Input from "agentic-ui-kit/components/ui/input.svelte";
   import PanelLeft from "@lucide/svelte/icons/panel-left";
   import PanelRight from "@lucide/svelte/icons/panel-right";
+  import ChevronsDownUp from "@lucide/svelte/icons/chevrons-down-up";
+  import ChevronsUpDown from "@lucide/svelte/icons/chevrons-up-down";
 
   type Props = {
     session: SessionRow;
@@ -16,6 +18,9 @@
     showExpandGit?: boolean;
     onExpandSidebar?: () => void;
     onExpandGit?: () => void;
+    /** Thinking + tool cards expanded (default true). */
+    foldOpen?: boolean;
+    onToggleFold?: () => void;
   };
 
   let {
@@ -26,6 +31,8 @@
     showExpandGit = false,
     onExpandSidebar,
     onExpandGit,
+    foldOpen = true,
+    onToggleFold,
   }: Props = $props();
 
   let renaming = $state(false);
@@ -136,7 +143,7 @@
 </script>
 
 <header
-  class="flex h-11 shrink-0 items-center gap-2 border-b border-black/[0.06] bg-[#f4f4f5] px-2 dark:border-white/10 dark:bg-[hsl(240_6%_8%)] sm:gap-3 sm:px-3"
+  class="flex h-11 shrink-0 items-center gap-2 border-b border-black/[0.06] bg-[var(--pi-canvas)] px-2 dark:border-white/10 sm:gap-3 sm:px-3"
 >
   {#if showExpandSidebar && onExpandSidebar}
     <button
@@ -202,6 +209,21 @@
     {/if}
     {#if isCompacting}
       <Badge variant="secondary" class="h-6 text-[10px]">compacting</Badge>
+    {/if}
+    {#if onToggleFold}
+      <button
+        type="button"
+        class="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        title={foldOpen ? "Collapse all thinking & tools" : "Expand all thinking & tools"}
+        aria-label={foldOpen ? "Collapse all thinking and tools" : "Expand all thinking and tools"}
+        onclick={onToggleFold}
+      >
+        {#if foldOpen}
+          <ChevronsDownUp class="size-4" />
+        {:else}
+          <ChevronsUpDown class="size-4" />
+        {/if}
+      </button>
     {/if}
     {#if showExpandGit && onExpandGit}
       <button

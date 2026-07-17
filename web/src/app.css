@@ -11,6 +11,14 @@
 :root {
   --font-inter: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
   --font-geist-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  /* Chat shell / sticky prompt canvas (warm off-white, not zinc gray) */
+  --pi-canvas: #faf9f7;
+  --pi-canvas-footer: color-mix(in oklab, #faf9f7 92%, white);
+}
+
+html.dark {
+  --pi-canvas: hsl(40 5% 9%);
+  --pi-canvas-footer: hsl(40 5% 10%);
 }
 
 html,

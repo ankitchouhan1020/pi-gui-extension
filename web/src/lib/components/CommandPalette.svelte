@@ -543,7 +543,7 @@
         });
         const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${base}</title>
 <style>body{font-family:system-ui;max-width:48rem;margin:2rem auto;padding:0 1rem}
-pre{white-space:pre-wrap;word-break:break-word;background:#f4f4f5;padding:1rem;border-radius:8px}
+pre{white-space:pre-wrap;word-break:break-word;background:var(--pi-canvas,#faf9f7);padding:1rem;border-radius:8px}
 h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
 <h1>${base}</h1>${parts.join("\n")}</body></html>`;
         downloadText(`${base}.html`, html, "text/html");
