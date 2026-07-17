@@ -1,6 +1,6 @@
 {
   "name": "pi-gui-extension",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Localhost web UI for pi — multi-session chat over the same coding-agent SDK as the terminal.",
   "type": "module",
   "license": "MIT",
