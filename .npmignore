@@ -1,0 +1,4 @@
+# Allowlist is package.json "files". This drops accidental extras.
+**/*.test.js
+**/*.test.ts
+**/*.tgz

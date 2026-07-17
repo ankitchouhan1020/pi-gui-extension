@@ -12,6 +12,7 @@ pi-gui is a **localhost web shell** over pi’s coding-agent SDK. Same idea as p
 | Look up routes or SSE shapes | [reference/](./reference/index.md) |
 | Do one concrete task | [recipes/](./recipes/index.md) |
 | Run / install | [../README.md](../README.md) |
+| Publish to npm | [release.md](./release.md) |
 | Always-on agent map | [../AGENTS.md](../AGENTS.md) |
 
 ## Agent read order (default)

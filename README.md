@@ -14,6 +14,8 @@ Use it when you want a browser for sessions, streaming, tools, and models withou
 pi install npm:pi-gui
 ```
 
+Maintainers: [docs/release.md](./docs/release.md) (tag → GitHub Actions → npm).
+
 Alternatives:
 
 ```bash
