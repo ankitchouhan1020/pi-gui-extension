@@ -6,8 +6,8 @@
   "license": "MIT",
   "author": "Ankit Chouhan (https://github.com/ankitchouhan1020)",
   "bin": {
-    "pi-gui": "./server/cli.js",
-    "pi-gui-extension": "./server/cli.js"
+    "pi-gui": "server/cli.js",
+    "pi-gui-extension": "server/cli.js"
   },
   "repository": {
     "type": "git",
