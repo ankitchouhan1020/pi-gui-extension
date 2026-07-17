@@ -22,7 +22,8 @@
 
   let sessions = $state<SessionRow[]>([]);
   let selected = $state<SessionRow | undefined>(undefined);
-  let loading = $state(false);
+  /** First successful (or failed) /api/sessions fetch — never re-block the sidebar. */
+  let listReady = $state(false);
   let err = $state<string | null>(null);
   let sidebarOpen = $state(
     (() => {
@@ -126,7 +127,6 @@
   }
 
   async function refresh() {
-    loading = true;
     try {
       const { sessions: rows } = await listSessions();
       sessions = mergeSessions(sessions, rows);
@@ -148,6 +148,7 @@
             name: row.name ?? selected.name,
             sessionName: row.sessionName ?? selected.sessionName,
             modified: row.modified,
+            path: row.path ?? selected.path,
           };
           if (pathSessionId() && pathSessionId() !== nextId) {
             setSessionUrl(nextId, "replace");
@@ -157,7 +158,7 @@
     } catch (e) {
       err = e instanceof Error ? e.message : String(e);
     } finally {
-      loading = false;
+      listReady = true;
     }
   }
 
@@ -177,13 +178,13 @@
     // Already open in hub — just switch UI (no POST /api/sessions)
     if (s.running) {
       selected = s;
+      upsertSession(s); // e.g. /fork returns a mounted session not yet in the list
       setSessionUrl(s.id, urlMode);
       return;
     }
 
     if (opening) return;
     opening = true;
-    loading = true;
     try {
       if (s.path) {
         const opened = await openSession({
@@ -207,12 +208,15 @@
         upsertSession(row);
         setSessionUrl(row.id, urlMode);
       }
+      // Re-list so sidebar Open/Recent and palette match hub (id may change on resume)
+      await refresh();
+      // List can miss the open hub session (path/id mismatch) — keep local truth
+      if (selected) upsertSession({ ...selected, running: true });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (!/Session not open/i.test(msg)) err = msg;
     } finally {
       opening = false;
-      loading = false;
     }
   }
 
@@ -275,7 +279,6 @@
     err = null;
     if (opening) throw new Error("Already opening a session");
     opening = true;
-    loading = true;
     try {
       const opened = await openSession({ content, filename });
       noteFallback(opened);
@@ -284,13 +287,13 @@
       upsertSession(row);
       setSessionUrl(row.id);
       await refresh();
+      if (selected) upsertSession({ ...selected, running: true });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       err = msg;
       throw e instanceof Error ? e : new Error(msg);
     } finally {
       opening = false;
-      loading = false;
     }
   }
 
@@ -471,7 +474,7 @@
     <SessionList
       {sessions}
       selectedId={selected?.id}
-      {loading}
+      {listReady}
       onSelect={onSelect}
       onNew={onNew}
       onCollapse={() => setSidebarOpen(false)}

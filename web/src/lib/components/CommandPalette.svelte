@@ -20,6 +20,7 @@
   import Sparkles from "@lucide/svelte/icons/sparkles";
   import Blocks from "@lucide/svelte/icons/blocks";
   import GitBranch from "@lucide/svelte/icons/git-branch";
+  import GitFork from "@lucide/svelte/icons/git-fork";
   import {
     downloadText,
     formatModelLabel,
@@ -28,12 +29,16 @@
     getSessionThinking,
     getTree,
     chatPrompt,
+    forkSession,
+    listForkCandidates,
     listModels,
     listSkills,
     listExtensions,
     messageText,
     navigateTree,
+    setPendingEditorText,
     shutdown,
+    type ForkCandidate,
     type ModelInfo,
     type SessionRow,
     type SkillInfo,
@@ -48,6 +53,8 @@
     icon?: typeof Search;
     shortcut?: string;
     disabled?: boolean;
+    /** Secondary line under label (e.g. session meta). */
+    caption?: string;
     /** Extra text for search (not shown). */
     keywords?: string;
     action: () => void | Promise<void>;
@@ -62,6 +69,7 @@
     | "skills"
     | "extensions"
     | "tree"
+    | "fork"
     | "hotkeys"
     | "changelog";
 
@@ -152,6 +160,9 @@
   let treeLeafId = $state<string | null>(null);
   let treeLoading = $state(false);
   let treeError = $state("");
+  let forkCandidates = $state<ForkCandidate[]>([]);
+  let forkLoading = $state(false);
+  let forkError = $state("");
   let continueCopied = $state(false);
 
   /** Shell-safe `pi --session <id>` for resuming this session in a terminal. */
@@ -279,6 +290,14 @@
     selectedIndex = 0;
     view = "tree";
     void loadTree();
+    requestAnimationFrame(() => inputRef?.focus());
+  }
+
+  function openFork() {
+    query = "";
+    selectedIndex = 0;
+    view = "fork";
+    void loadFork();
     requestAnimationFrame(() => inputRef?.focus());
   }
 
@@ -524,6 +543,36 @@
     }
   }
 
+  async function loadFork() {
+    if (!session?.id) return;
+    forkLoading = true;
+    forkError = "";
+    try {
+      const res = await listForkCandidates(session.id);
+      // Newest first — match pi selector UX for recent prompts.
+      forkCandidates = [...(res.messages ?? [])].reverse();
+    } catch (e) {
+      forkError = e instanceof Error ? e.message : String(e);
+      forkCandidates = [];
+    } finally {
+      forkLoading = false;
+    }
+  }
+
+  async function pickFork(c: ForkCandidate) {
+    if (!session?.id || !c.entryId) return;
+    try {
+      const row = await forkSession(session.id, c.entryId, {
+        position: "before",
+      });
+      setPendingEditorText(row.selectedText ?? c.text);
+      onResume?.({ ...row, running: true });
+      onClose();
+    } catch (e) {
+      forkError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   async function exportSession(fmt: "jsonl" | "html") {
     if (!session?.id) return;
     try {
@@ -643,6 +692,12 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
         `${n.preview} ${n.type} ${n.role ?? ""} ${n.label ?? ""} ${n.id}`.toLowerCase();
       return hay.includes(q);
     });
+  });
+
+  const filteredFork = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return forkCandidates;
+    return forkCandidates.filter((c) => c.text.toLowerCase().includes(q));
   });
 
   function treeKind(n: TreeNode): string {
@@ -795,6 +850,15 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
       });
 
       cmds.push({
+        id: "fork",
+        label: "Fork",
+        category: "Session",
+        icon: GitFork,
+        keywords: "branch clone",
+        action: openFork,
+      });
+
+      cmds.push({
         id: "export-jsonl",
         label: "Export session (JSONL)",
         category: "Session",
@@ -845,7 +909,13 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
     });
 
     // All sessions (open + closed) — searchable; empty query limited in filtered.
-    for (const s of sessions) {
+    // Server already sorts by modified-desc; keep that order for Recent.
+    const byModified = [...sessions].sort((a, b) => {
+      const am = a.modified ? new Date(a.modified).getTime() : 0;
+      const bm = b.modified ? new Date(b.modified).getTime() : 0;
+      return bm - am;
+    });
+    for (const s of byModified) {
       if (s.id === session?.id) continue;
       const name =
         s.name ||
@@ -853,13 +923,16 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
         s.firstMessage?.slice(0, 40) ||
         "Untitled";
       const folder = s.cwd?.split("/").filter(Boolean).at(-1);
+      const caption = [folder, formatModified(s.modified), s.running ? "open" : null]
+        .filter(Boolean)
+        .join(" · ");
       cmds.push({
         id: `resume-${s.id}`,
-        label: s.running
-          ? `Switch: ${name}`
-          : `Resume: ${name}${folder ? ` · ${folder}` : ""}`,
+        label: name,
+        caption: caption || undefined,
         category: "Recent",
-        keywords: [s.firstMessage, s.cwd, s.path, s.id, s.sessionName, s.name]
+        shortcut: s.running ? "Switch" : "Resume",
+        keywords: [s.firstMessage, s.cwd, s.path, s.id, s.sessionName, s.name, caption]
           .filter(Boolean)
           .join(" "),
         icon: FileText,
@@ -868,6 +941,21 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
     }
 
     return cmds;
+  }
+
+  function formatModified(d?: string | Date): string {
+    if (!d) return "";
+    const t = new Date(d).getTime();
+    if (!Number.isFinite(t)) return "";
+    const sec = Math.round((Date.now() - t) / 1000);
+    if (sec < 60) return "just now";
+    if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+    if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+    if (sec < 86400 * 7) return `${Math.floor(sec / 86400)}d ago`;
+    return new Date(t).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    });
   }
 
   const commands = $derived(buildCommands());
@@ -885,7 +973,7 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
       });
     }
     return commands.filter((c) =>
-      (c.label + " " + c.category + " " + (c.keywords ?? ""))
+      (c.label + " " + (c.caption ?? "") + " " + c.category + " " + (c.keywords ?? ""))
         .toLowerCase()
         .includes(q),
     );
@@ -924,7 +1012,8 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
         view === "thinking" ||
         view === "skills" ||
         view === "extensions" ||
-        view === "tree")
+        view === "tree" ||
+        view === "fork")
     ) {
       selectedIndex = 0;
     }
@@ -1070,6 +1159,29 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
         e.preventDefault();
         const row = filteredTree[selectedIndex];
         if (row) void pickTreeNode(row.node);
+        return;
+      }
+      return;
+    }
+
+    if (view === "fork") {
+      const n = filteredFork.length;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        if (n) selectedIndex = Math.min(selectedIndex + 1, n - 1);
+        scrollSelectedIntoView();
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        selectedIndex = Math.max(selectedIndex - 1, 0);
+        scrollSelectedIntoView();
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const c = filteredFork[selectedIndex];
+        if (c) void pickFork(c);
         return;
       }
       return;
@@ -1537,6 +1649,61 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
           <span>↑↓ · Enter to jump · Esc back</span>
           <span>{filteredTree.length} entr{filteredTree.length === 1 ? "y" : "ies"}</span>
         </div>
+      {:else if view === "fork"}
+        <div class="flex items-center gap-2 border-b border-border px-4 py-3">
+          <GitFork class="size-4 shrink-0 text-muted-foreground" />
+          <input
+            bind:this={inputRef}
+            type="text"
+            bind:value={query}
+            placeholder="Fork from user message…"
+            class="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+          />
+          <kbd
+            class="hidden rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground sm:inline-block"
+          >
+            ESC
+          </kbd>
+        </div>
+        <div bind:this={listRef} class="max-h-[50vh] overflow-y-auto py-2">
+          {#if forkLoading}
+            <div class="px-4 py-6 text-center text-sm text-muted-foreground">
+              Loading messages…
+            </div>
+          {:else if forkError}
+            <div class="px-4 py-6 text-center text-sm text-destructive">
+              {forkError}
+            </div>
+          {:else if filteredFork.length === 0}
+            <div class="px-4 py-6 text-center text-sm text-muted-foreground">
+              No user messages to fork from
+            </div>
+          {:else}
+            {#each filteredFork as c, i (c.entryId)}
+              {@const active = i === selectedIndex}
+              {@const preview = (c.text || "—").replace(/\s+/g, " ").trim()}
+              <button
+                data-index={i}
+                class="mx-2 flex w-[calc(100%-1rem)] cursor-pointer items-center gap-2 rounded-md px-3 py-1.5 text-left text-sm transition-colors {active
+                  ? 'bg-accent text-accent-foreground'
+                  : 'hover:bg-accent/50 text-popover-foreground'}"
+                onclick={() => void pickFork(c)}
+                type="button"
+                title={preview}
+              >
+                <span class="min-w-0 flex-1 truncate">{preview}</span>
+              </button>
+            {/each}
+          {/if}
+        </div>
+        <div class="flex items-center justify-between border-t border-border px-4 py-2 text-[10px] text-muted-foreground">
+          <span>↑↓ · Enter to fork · Esc back</span>
+          <span
+            >{filteredFork.length} message{filteredFork.length === 1
+              ? ""
+              : "s"}</span
+          >
+        </div>
       {:else if view === "models"}
         <div class="flex items-center gap-2 border-b border-border px-4 py-3">
           <Cpu class="size-4 shrink-0 text-muted-foreground" />
@@ -1637,8 +1804,19 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
                   }}
                   type="button"
                 >
-                  <Icon class="size-4 shrink-0 opacity-70" />
-                  <span class="flex-1 truncate">{cmd.label}</span>
+                  <Icon class="size-4 shrink-0 opacity-70 {cmd.caption ? 'self-start mt-0.5' : ''}" />
+                  <span class="min-w-0 flex-1">
+                    <span class="block truncate">{cmd.label}</span>
+                    {#if cmd.caption}
+                      <span
+                        class="mt-0.5 block truncate text-[11px] {active
+                          ? 'text-accent-foreground/70'
+                          : 'text-muted-foreground'}"
+                      >
+                        {cmd.caption}
+                      </span>
+                    {/if}
+                  </span>
                   {#if cmd.shortcut}
                     <kbd class="rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground">
                       {cmd.shortcut}

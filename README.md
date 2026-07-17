@@ -49,7 +49,7 @@ Localhost only (`127.0.0.1`). No auth — treat it like the TUI on your machine.
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `PI_GUI_PORT` | `3847` | HTTP port |
-| `PI_GUI_SESSION_IDLE_MS` | `600000` (10 min) | Close hub session when no SSE clients (`0` disables) |
+| `PI_GUI_SESSION_IDLE_MS` | `86400000` (1 day) | Close hub session when no SSE clients (`0` disables) |
 
 Models, auth, skills, and extensions come from pi — this package does not add a second config system.
 

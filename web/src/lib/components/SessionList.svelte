@@ -15,7 +15,8 @@
   type Props = {
     sessions: SessionRow[];
     selectedId?: string;
-    loading?: boolean;
+    /** First /api/sessions attempt finished (success or fail). */
+    listReady?: boolean;
     onSelect: (s: SessionRow) => void;
     /** Optional cwd — new session in that folder. */
     onNew: (cwd?: string) => void;
@@ -27,7 +28,7 @@
   let {
     sessions,
     selectedId,
-    loading = false,
+    listReady = false,
     onSelect,
     onNew,
     onCollapse,
@@ -134,6 +135,14 @@
     return s.path || s.id;
   }
 
+  function archiveKeys(s: SessionRow): string[] {
+    return [...new Set([sk(s), s.path, s.id].filter(Boolean) as string[])];
+  }
+
+  function isArchived(s: SessionRow) {
+    return archiveKeys(s).some((k) => archived.has(k));
+  }
+
   function archiveSession(s: SessionRow, e: MouseEvent) {
     e.stopPropagation();
     const next = new Set(archived);
@@ -142,15 +151,41 @@
     saveJson(ARCHIVED_KEY, [...next]);
   }
 
+  /** Resume / focus clears archive so the session reappears in the sidebar. */
+  function unarchiveSession(s: SessionRow) {
+    const next = new Set(archived);
+    let hit = false;
+    for (const k of archiveKeys(s)) {
+      if (next.delete(k)) hit = true;
+    }
+    if (!hit) return;
+    archived = next;
+    saveJson(ARCHIVED_KEY, [...next]);
+  }
+
+  function selectSession(s: SessionRow) {
+    unarchiveSession(s);
+    onSelect(s);
+  }
+
+  // Palette / URL resume updates selectedId without going through selectSession
+  $effect(() => {
+    if (!selectedId) return;
+    const s = sessions.find(
+      (x) => x.id === selectedId || x.path === selectedId,
+    );
+    if (s && isArchived(s)) unarchiveSession(s);
+  });
+
   /** Open (hub) only — past disk sessions stay in Recent until resumed. */
-  const RECENT = 5;
+  const RECENT = 8;
   const openSessions = $derived(
-    sessions.filter((s) => s.running && !archived.has(sk(s))),
+    sessions.filter((s) => s.running && !isArchived(s)),
   );
   const pastSessions = $derived.by(() => {
     const out: SessionRow[] = [];
     for (const s of sessions) {
-      if (s.running || archived.has(sk(s))) continue;
+      if (s.running || isArchived(s)) continue;
       out.push(s);
       if (out.length >= RECENT) break;
     }
@@ -316,7 +351,7 @@
 
       {#if openSessions.length === 0}
         <div class="px-2 py-6 text-center text-xs text-muted-foreground">
-          {loading ? "Loading…" : "No open sessions"}
+          {listReady ? "No open sessions" : "Loading…"}
         </div>
       {:else}
         {#each groups as g (g.key)}
@@ -384,7 +419,7 @@
                       <button
                         type="button"
                         class="min-w-0 flex-1 rounded-lg px-2 py-1.5 text-left"
-                        onclick={() => onSelect(s)}
+                        onclick={() => selectSession(s)}
                       >
                         <div class="flex min-w-0 items-center gap-1.5">
                           {#if s.streaming}
@@ -427,40 +462,52 @@
       {/if}
 
       {#if pastSessions.length > 0}
+        {@const recentOpen = isOpen("__recent__")}
         <Separator class="my-2" />
-        <div class="px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-          Recent
-        </div>
-        <ul class="ml-3 flex flex-col gap-0.5 border-l border-border pl-2">
-          {#each pastSessions as s (s.id + (s.path ?? ""))}
-            <li>
-              <div
-                class="group/item flex items-center gap-0.5 rounded-lg transition-colors hover:bg-muted/80
-                  {selectedId === s.id ? 'bg-muted' : ''}"
-              >
-                <button
-                  type="button"
-                  class="min-w-0 flex-1 rounded-lg px-2 py-1.5 text-left"
-                  title="Resume session"
-                  onclick={() => onSelect(s)}
+        <button
+          type="button"
+          class="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[11px] font-medium uppercase tracking-wide text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+          onclick={() => toggle("__recent__")}
+        >
+          <ChevronRight
+            class="size-3.5 shrink-0 transition-transform {recentOpen
+              ? 'rotate-90'
+              : ''}"
+          />
+          <span class="min-w-0 flex-1">Recent</span>
+        </button>
+        {#if recentOpen}
+          <ul class="ml-3 flex flex-col gap-0.5 border-l border-border pl-2">
+            {#each pastSessions as s (s.id + (s.path ?? ""))}
+              <li>
+                <div
+                  class="group/item flex items-center gap-0.5 rounded-lg transition-colors hover:bg-muted/80
+                    {selectedId === s.id ? 'bg-muted' : ''}"
                 >
-                  <span class="block min-w-0 truncate text-xs font-medium text-muted-foreground">
-                    {label(s)}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  class="mr-0.5 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 hover:bg-muted hover:text-foreground group-hover/item:opacity-100 focus-visible:opacity-100"
-                  title="Archive (hide from sidebar)"
-                  aria-label="Archive session"
-                  onclick={(e) => archiveSession(s, e)}
-                >
-                  <Archive class="size-3.5" />
-                </button>
-              </div>
-            </li>
-          {/each}
-        </ul>
+                  <button
+                    type="button"
+                    class="min-w-0 flex-1 rounded-lg px-2 py-1.5 text-left"
+                    title="Resume session"
+                    onclick={() => selectSession(s)}
+                  >
+                    <span class="block min-w-0 truncate text-xs font-medium text-muted-foreground">
+                      {label(s)}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    class="mr-0.5 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 hover:bg-muted hover:text-foreground group-hover/item:opacity-100 focus-visible:opacity-100"
+                    title="Archive (hide from sidebar)"
+                    aria-label="Archive session"
+                    onclick={(e) => archiveSession(s, e)}
+                  >
+                    <Archive class="size-3.5" />
+                  </button>
+                </div>
+              </li>
+            {/each}
+          </ul>
+        {/if}
       {/if}
     </div>
   </div>

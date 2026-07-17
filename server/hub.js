@@ -47,7 +47,7 @@ function modelRegistry(session) {
  */
 
 /** Idle-close when no SSE listeners (0 = disabled). */
-const SESSION_IDLE_MS = Number(process.env.PI_GUI_SESSION_IDLE_MS ?? 10 * 60 * 1000);
+const SESSION_IDLE_MS = Number(process.env.PI_GUI_SESSION_IDLE_MS ?? 24 * 60 * 60 * 1000);
 
 /** Recent SSE events for Last-Event-ID replay after reconnect. */
 const SSE_RING_MAX = 500;

@@ -354,18 +354,23 @@
   {:else if isUser}
     <Message class="justify-end">
       <div class="flex max-w-[min(100%,48rem)] flex-col items-end gap-1.5">
-        {#each parts as p, pi (`img-${pi}`)}
-          {#if p.type === "image"}
-            {@const src = imagePartSrc(p)}
-            {#if src}
-              <img
-                src={src}
-                alt="attachment"
-                class="max-h-48 max-w-full rounded-lg border border-border/60 object-contain"
-              />
-            {/if}
-          {/if}
-        {/each}
+        {#if parts.some((p) => p.type === "image")}
+          <div class="flex max-w-full flex-wrap justify-end gap-1">
+            {#each parts as p, pi (`img-${pi}`)}
+              {#if p.type === "image"}
+                {@const src = imagePartSrc(p)}
+                {#if src}
+                  <img
+                    src={src}
+                    alt="attachment"
+                    class="size-10 rounded-md border border-border/60 object-cover"
+                    title="Image attachment"
+                  />
+                {/if}
+              {/if}
+            {/each}
+          </div>
+        {/if}
         {#if text.trim() || typeof message.content === "string"}
           <!--
             Icons sit in-flow left of the bubble (same row, top-aligned).

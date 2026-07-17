@@ -26,6 +26,7 @@
     registerChatPrompt,
     steer,
     subscribeEvents,
+    takePendingEditorText,
   } from "$lib/api";
   import {
     ChatStream,
@@ -33,6 +34,7 @@
     type StreamEffect,
   } from "$lib/chat-stream";
   import X from "@lucide/svelte/icons/x";
+  import ComposerPlus from "$lib/components/ComposerPlus.svelte";
   import FolderPicker from "$lib/components/FolderPicker.svelte";
   import MessageBubble from "$lib/components/MessageBubble.svelte";
   import ModelPicker from "$lib/components/ModelPicker.svelte";
@@ -730,6 +732,9 @@
       writeDraft(draftOwner, draft);
       draftOwner = id;
       draft = readDraft(id);
+      // /fork: selected prompt lands in editor (one-shot from CommandPalette).
+      const pending = takePendingEditorText();
+      if (pending) draft = pending;
       wiredId = id;
       dropPending();
       showAllMsgs = false;
@@ -1146,21 +1151,21 @@
           onSubmit={() => send("default")}
         >
           {#if attachments.length}
-            <div class="flex flex-wrap gap-2 px-3 pt-2">
+            <div class="flex flex-wrap items-center gap-1.5 px-3 pt-1.5">
               {#each attachments as a, ai (`a${ai}`)}
-                <div class="relative">
+                <div class="relative shrink-0">
                   <img
                     src={a.preview}
                     alt=""
-                    class="h-14 w-14 rounded-md border border-border/60 object-cover"
+                    class="size-8 rounded border border-border/60 object-cover"
                   />
                   <button
                     type="button"
-                    class="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm hover:text-foreground"
+                    class="absolute -right-1 -top-1 flex size-4 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm hover:text-foreground"
                     onclick={() => removeAttach(ai)}
                     aria-label="Remove attachment"
                   >
-                    <X class="size-3" />
+                    <X class="size-2.5" />
                   </button>
                 </div>
               {/each}
@@ -1174,6 +1179,7 @@
           />
           <PromptInputActions class="items-end justify-between gap-2 pt-1">
             <div class="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+              <ComposerPlus onFiles={(f) => void addImageFiles(f)} />
               {#if !session?.id}
                 <FolderPicker
                   value={draftCwd}
@@ -1359,21 +1365,21 @@
           disabled={session ? !session.running && !session.id : false}
         >
           {#if attachments.length}
-            <div class="flex flex-wrap gap-2 px-3 pt-2">
+            <div class="flex flex-wrap items-center gap-1.5 px-3 pt-1.5">
               {#each attachments as a, ai (`a${ai}`)}
-                <div class="relative">
+                <div class="relative shrink-0">
                   <img
                     src={a.preview}
                     alt=""
-                    class="h-14 w-14 rounded-md border border-border/60 object-cover"
+                    class="size-8 rounded border border-border/60 object-cover"
                   />
                   <button
                     type="button"
-                    class="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm hover:text-foreground"
+                    class="absolute -right-1 -top-1 flex size-4 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm hover:text-foreground"
                     onclick={() => removeAttach(ai)}
                     aria-label="Remove attachment"
                   >
-                    <X class="size-3" />
+                    <X class="size-2.5" />
                   </button>
                 </div>
               {/each}
@@ -1387,6 +1393,7 @@
           />
           <PromptInputActions class="items-end justify-between gap-2 pt-1">
             <div class="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+              <ComposerPlus onFiles={(f) => void addImageFiles(f)} />
               {#if session?.id}
                 <ModelPicker
                   sessionId={session.id}
