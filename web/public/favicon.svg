@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <rect width="32" height="32" rx="8" fill="#18181b"/>
+  <!-- window chrome -->
+  <circle cx="9" cy="9" r="1.25" fill="#52525b"/>
+  <circle cx="13" cy="9" r="1.25" fill="#52525b"/>
+  <circle cx="17" cy="9" r="1.25" fill="#52525b"/>
+  <!-- π -->
+  <path
+    d="M8.5 14.25h15M12.25 14.25v9.5c0 .7-.45 1.25-1.15 1.25M19.75 14.25v9.5c0 .7.45 1.25 1.15 1.25"
+    stroke="#fafafa"
+    stroke-width="2.1"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <!-- accent: prompt caret -->
+  <path d="M22.5 22.5h3.5" stroke="#a78bfa" stroke-width="2" stroke-linecap="round"/>
+</svg>

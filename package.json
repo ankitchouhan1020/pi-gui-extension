@@ -1,0 +1,67 @@
+{
+  "name": "pi-gui",
+  "version": "0.1.0",
+  "description": "Localhost web UI for pi — multi-session chat over the same coding-agent SDK as the terminal.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Ankit Chouhan (https://github.com/ankitchouhan1020)",
+  "bin": {
+    "pi-gui": "./server/cli.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ankitchouhan1020/pi-gui-extension.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ankitchouhan1020/pi-gui-extension/issues"
+  },
+  "homepage": "https://github.com/ankitchouhan1020/pi-gui-extension#readme",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "pi-gui",
+    "gui",
+    "web-ui",
+    "agent",
+    "sse"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "server",
+    "extensions",
+    "dist",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "dev": "npm run dev:web & npm run dev:server",
+    "dev:server": "node --watch server/cli.js",
+    "dev:web": "npm run dev --prefix web",
+    "build": "npm run build --prefix web",
+    "start": "node server/cli.js",
+    "check": "npm run check --prefix web",
+    "test": "node --test server/stabilize.test.js server/sse-protocol.test.js && node --experimental-strip-types --test web/src/lib/chat-stream.test.ts",
+    "prepublishOnly": "npm install --prefix web && npm run build"
+  },
+  "pi": {
+    "extensions": ["./extensions"]
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.6"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  }
+}

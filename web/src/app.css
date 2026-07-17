@@ -1,0 +1,26 @@
+/* Vendored kit design tokens + loader keyframes */
+@import "./lib/kit/styles/globals.css";
+@import "@fontsource-variable/inter";
+
+/* Scan kit + app for Tailwind classes */
+@source "./lib/kit/**/*.{svelte,ts,js}";
+@source "./**/*.{svelte,ts,js}";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --font-inter: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-geist-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-inter);
+  -webkit-font-smoothing: antialiased;
+}
