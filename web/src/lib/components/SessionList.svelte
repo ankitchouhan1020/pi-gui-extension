@@ -1,6 +1,5 @@
 <script lang="ts">
   import type { SessionRow } from "$lib/api";
-  import ScrollArea from "agentic-ui-kit/components/ui/scroll-area.svelte";
   import Separator from "agentic-ui-kit/components/ui/separator.svelte";
   import ThemeToggle from "agentic-ui-kit/components/ui/theme-toggle.svelte";
   import Plus from "@lucide/svelte/icons/plus";
@@ -11,6 +10,7 @@
   import GripVertical from "@lucide/svelte/icons/grip-vertical";
   import Archive from "@lucide/svelte/icons/archive";
   import PanelLeftClose from "@lucide/svelte/icons/panel-left-close";
+  import Command from "@lucide/svelte/icons/command";
 
   type Props = {
     sessions: SessionRow[];
@@ -20,6 +20,8 @@
     /** Optional cwd — new session in that folder. */
     onNew: (cwd?: string) => void;
     onCollapse?: () => void;
+    /** Open command palette (⌘K / Ctrl+K). */
+    onOpenPalette?: () => void;
   };
 
   let {
@@ -29,7 +31,12 @@
     onSelect,
     onNew,
     onCollapse,
+    onOpenPalette,
   }: Props = $props();
+
+  const isMac =
+    typeof navigator !== "undefined" &&
+    /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent);
 
   /** Folder keys the user collapsed. Absent = open (default expanded). */
   let collapsed = $state(new Set<string>());
@@ -289,7 +296,8 @@
       {/if}
     </div>
   </div>
-  <ScrollArea class="flex-1">
+  <!-- min-h-0 so flex child can shrink and scroll when sessions overflow -->
+  <div class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
     <div class="flex flex-col gap-0.5 p-2">
       <button
         type="button"
@@ -298,7 +306,7 @@
         onclick={() => onNew()}
       >
         <MessageSquarePlus class="size-3.5 shrink-0 text-muted-foreground" />
-        <span class="min-w-0 flex-1 truncate">New session</span>
+        <span class="min-w-0 flex-1 truncate">New Session</span>
       </button>
 
       <Separator class="my-1.5" />
@@ -455,7 +463,25 @@
         </ul>
       {/if}
     </div>
-  </ScrollArea>
+  </div>
+  {#if onOpenPalette}
+    <div class="shrink-0 border-t border-border p-2">
+      <button
+        type="button"
+        class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-muted/80 hover:text-foreground"
+        title="Command palette"
+        onclick={onOpenPalette}
+      >
+        <Command class="size-3.5 shrink-0" />
+        <span class="min-w-0 flex-1 truncate">Commands</span>
+        <kbd
+          class="pointer-events-none hidden shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:inline"
+        >
+          {isMac ? "⌘K" : "Ctrl+K"}
+        </kbd>
+      </button>
+    </div>
+  {/if}
   <div
     role="separator"
     aria-orientation="vertical"

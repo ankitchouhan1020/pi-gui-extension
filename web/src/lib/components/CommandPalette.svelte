@@ -661,7 +661,7 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
 
     cmds.push({
       id: "new",
-      label: "New session",
+      label: "New Session",
       category: "Session",
       icon: Plus,
       action: () => run(onNew),

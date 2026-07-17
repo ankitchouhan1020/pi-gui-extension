@@ -475,6 +475,7 @@
       onSelect={onSelect}
       onNew={onNew}
       onCollapse={() => setSidebarOpen(false)}
+      onOpenPalette={() => (cmdkOpen = true)}
     />
   {/if}
   <div class="flex min-w-0 flex-1 flex-col">
