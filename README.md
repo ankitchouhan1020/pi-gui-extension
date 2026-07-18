@@ -2,6 +2,10 @@
 
 Pi extension for a localhost multi-session web UI over the same coding-agent SDK as the terminal.
 
+
+<img width="2940" height="1846" alt="pi-gui" src="https://github.com/user-attachments/assets/e1da0c5c-fe19-445e-9f07-24625eeef5f9" />
+
+
 ## Install
 
 ```bash
