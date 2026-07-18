@@ -31,4 +31,38 @@ body,
 body {
   font-family: var(--font-inter);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: color-mix(in oklab, hsl(265 84% 72%) 32%, transparent);
+}
+
+:where(button, a, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid color-mix(in oklab, hsl(var(--ring)) 78%, white);
+  outline-offset: 2px;
+}
+
+.pi-tactile {
+  transform: translateZ(0);
+  transition-property: transform, color, background-color, border-color, opacity;
+  transition-duration: 180ms;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pi-tactile:active:not(:disabled) {
+    transform: scale(0.96);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

@@ -1,0 +1,69 @@
+<starlight-theme-toggle>
+  <button type="button" aria-label="Toggle theme" title="Toggle theme">
+    <svg class="sun" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="4"></circle>
+      <path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41m14.14-14.14-1.41 1.41"></path>
+    </svg>
+    <svg class="moon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M20.99 12.49A9 9 0 1 1 11.51 3a6 6 0 0 0 9.47 9.49Z"></path>
+    </svg>
+  </button>
+</starlight-theme-toggle>
+
+<script is:inline>
+  (() => {
+    const storageKey = "starlight-theme";
+
+    class StarlightThemeToggle extends HTMLElement {
+      connectedCallback() {
+        this.querySelector("button")?.addEventListener("click", () => {
+          const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+          document.documentElement.dataset.theme = next;
+          localStorage.setItem(storageKey, next);
+          window.StarlightThemeProvider?.updatePickers(next);
+        });
+      }
+    }
+
+    if (!customElements.get("starlight-theme-toggle")) {
+      customElements.define("starlight-theme-toggle", StarlightThemeToggle);
+    }
+  })();
+</script>
+
+<style>
+  button {
+    display: grid;
+    width: 2rem;
+    height: 2rem;
+    place-items: center;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 999px;
+    background: var(--sl-color-black);
+    color: var(--sl-color-white);
+    cursor: pointer;
+  }
+
+  button:hover {
+    background: var(--sl-color-gray-6);
+  }
+
+  svg {
+    width: 0.95rem;
+    height: 0.95rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .moon,
+  :global(:root[data-theme="dark"]) .sun {
+    display: none;
+  }
+
+  :global(:root[data-theme="dark"]) .moon {
+    display: block;
+  }
+</style>

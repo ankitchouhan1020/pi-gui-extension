@@ -57,6 +57,11 @@
   import PanelRight from "@lucide/svelte/icons/panel-right";
   import { onDestroy, tick, untrack } from "svelte";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
+  import Sparkles from "@lucide/svelte/icons/sparkles";
+  import Bug from "@lucide/svelte/icons/bug";
+  import MapIcon from "@lucide/svelte/icons/map";
+  import Telescope from "@lucide/svelte/icons/telescope";
+  import { playFeedback } from "$lib/feedback";
 
   const LS_CWD = "pi-gui-last-cwd";
   const LS_MODEL = "pi-gui-last-model";
@@ -493,7 +498,7 @@
           break;
         case "settled":
           paintNow = true;
-          clearTurnBusy();
+          clearTurnBusy(true);
           if (wiredId === id && ef.reload !== false) {
             void load(id, { quiet: true });
             scheduleMeta(id);
@@ -501,6 +506,8 @@
           break;
         case "error":
           error = ef.error;
+          turnHadError = true;
+          playFeedback("error");
           void catchUp(id);
           break;
         case "bash_running":
@@ -671,6 +678,8 @@
    * catchUp must not clear streaming in the 202→agent_start race.
    */
   let awaitingSettle = false;
+  /** Suppress the completion chime when the active turn already reported an error. */
+  let turnHadError = false;
   /** Server reported streaming this turn — idle then means settle (SSE may have been missed). */
   let sawServerStreaming = false;
   let lastPromptAt = 0;
@@ -691,7 +700,10 @@
     lastPromptAt = 0;
   }
 
-  function clearTurnBusy() {
+  function clearTurnBusy(playCompletion = false) {
+    if (playCompletion && lastPromptAt > 0 && !turnHadError) {
+      playFeedback("success");
+    }
     recordWorkDuration();
     stream.clearTurn();
     awaitingSettle = false;
@@ -700,6 +712,7 @@
     stopTurnWatch();
     queueSteer = [];
     queueFollowUp = [];
+    turnHadError = false;
   }
 
   function stopTurnWatch() {
@@ -769,7 +782,7 @@
         return;
       }
       if (stream.shouldSettleFromIdle()) {
-        clearTurnBusy();
+        clearTurnBusy(true);
         scheduleMeta(id);
       }
     } catch {
@@ -1296,6 +1309,7 @@
         void scrollBottom();
       } else {
         flush();
+        turnHadError = false;
         const content: unknown =
           images.length > 0
             ? [
@@ -1313,6 +1327,7 @@
         syncTurnFlags();
         lastPromptAt = stream.lastPromptAt;
         void scrollBottom();
+        playFeedback("send");
         await prompt(id, body, imgPayload);
         // REST is 202 fire-and-forget — poll if SSE misses the turn
         startTurnWatch(id);
@@ -1323,6 +1338,7 @@
       }
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
+      playFeedback("error");
       failedPrompt = { text: body, images, options };
       if (startedTurn) clearTurnBusy();
     } finally {
@@ -1361,6 +1377,11 @@
       }
     }
     void send("default");
+  }
+
+  function seedPrompt(text: string) {
+    draft = text;
+    focusComposer();
   }
 
   function onTextareaKey(e: KeyboardEvent) {
@@ -1544,22 +1565,22 @@
         {/if}
       </header>
     {/if}
-    <!-- Cursor-style empty: greeting + centered composer -->
-    <div class="flex min-h-0 flex-1 flex-col items-center justify-center px-4 pb-[12vh] pt-8">
-      <div class="mb-8 max-w-lg text-center">
-        <h1 class="text-2xl font-semibold tracking-tight sm:text-[1.75rem]">
-          What can I help with?
+    <div class="home-stage relative flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden px-4 pb-[8vh] pt-8">
+      <div class="home-aurora" aria-hidden="true"></div>
+      <div class="home-intro relative z-[1] mb-7 max-w-xl text-center">
+        <h1 class="text-balance text-2xl font-semibold tracking-[-0.03em] sm:text-[2rem]">
+          What will we build?
         </h1>
-        <p class="mt-2 text-sm text-muted-foreground">
+        <p class="mt-2.5 text-pretty text-sm leading-6 text-muted-foreground">
           {#if session?.id}
-            Empty session · type to continue
+            This session is ready for its first task.
           {:else}
-            New session · pick folder · submit to create
+            Describe a task, choose a folder, and pi will take it from there.
           {/if}
         </p>
       </div>
       <div
-        class="relative w-full max-w-2xl"
+        class="home-composer relative z-[1] w-full max-w-2xl"
         ondragover={onComposerDragOver}
         ondrop={onComposerDrop}
       >
@@ -1574,7 +1595,7 @@
           class={promptBoxClass}
           bind:value={draft}
           {attachments}
-          placeholder="Ask anything  (/ commands · ! bash)"
+          placeholder="Describe a task · / commands · ! bash"
           textareaClass="min-h-[56px] text-[15px]"
           isLoading={sending}
           {canSend}
@@ -1613,6 +1634,24 @@
           </div>
         {/if}
       </div>
+      <div class="home-suggestions relative z-[1] mt-4 grid w-full max-w-2xl grid-cols-1 gap-2 sm:grid-cols-3" aria-label="Prompt suggestions">
+        <button type="button" class="pi-tactile prompt-seed" onclick={() => seedPrompt("Explore this codebase and explain how its main pieces fit together") }>
+          <Telescope class="size-3.5" aria-hidden="true" />
+          <span>Explore the codebase</span>
+        </button>
+        <button type="button" class="pi-tactile prompt-seed" onclick={() => seedPrompt("Find a meaningful bug in this codebase, explain the cause, and fix it") }>
+          <Bug class="size-3.5" aria-hidden="true" />
+          <span>Find and fix a bug</span>
+        </button>
+        <button type="button" class="pi-tactile prompt-seed" onclick={() => seedPrompt("Help me shape and plan a thoughtful new feature for this project") }>
+          <MapIcon class="size-3.5" aria-hidden="true" />
+          <span>Plan a feature</span>
+        </button>
+      </div>
+      <div class="home-hint relative z-[1] mt-4 flex items-center gap-1.5 text-[11px] text-muted-foreground/80">
+        <Sparkles class="size-3" aria-hidden="true" />
+        Suggestions fill the prompt — nothing sends until you choose.
+      </div>
     </div>
   {:else}
     {#if session}
@@ -1644,7 +1683,7 @@
             </button>
           {/if}
           {#each messageTurns as turn (turn.startIndex)}
-            <div class="flex flex-col gap-5">
+            <div class="message-turn flex flex-col gap-5">
               {#each turn.userItems as { m, i } (messageKey(m, i))}
                 {#if editing?.index === i}
                   <div
@@ -1858,5 +1897,91 @@
   }
   .chat-footer {
     background: var(--pi-canvas);
+  }
+
+  .home-aurora {
+    position: absolute;
+    top: 46%;
+    left: 50%;
+    width: min(780px, 86vw);
+    height: min(520px, 62vh);
+    transform: translate(-50%, -50%);
+    border-radius: 999px;
+    background:
+      radial-gradient(circle at 28% 42%, color-mix(in oklab, hsl(265 84% 72%) 20%, transparent) 0, transparent 43%),
+      radial-gradient(circle at 72% 44%, color-mix(in oklab, hsl(190 82% 62%) 16%, transparent) 0, transparent 45%),
+      radial-gradient(circle at 50% 72%, color-mix(in oklab, hsl(35 96% 65%) 11%, transparent) 0, transparent 48%);
+    filter: blur(38px);
+    opacity: 0.72;
+    pointer-events: none;
+  }
+
+  .prompt-seed {
+    display: inline-flex;
+    min-height: 40px;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    border: 1px solid color-mix(in oklab, currentColor 10%, transparent);
+    border-radius: 0.75rem;
+    background: color-mix(in oklab, var(--pi-canvas) 78%, transparent);
+    padding: 0.55rem 0.75rem;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.75rem;
+    font-weight: 500;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.5) inset;
+    backdrop-filter: blur(12px);
+    transition-property: color, background-color, border-color, transform, box-shadow;
+    transition-duration: 180ms;
+    transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  .prompt-seed:hover {
+    color: hsl(var(--foreground));
+    background: color-mix(in oklab, var(--pi-canvas) 52%, white);
+    border-color: color-mix(in oklab, currentColor 18%, transparent);
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.07);
+    transform: translateY(-1px);
+  }
+
+  :global(html.dark) .prompt-seed:hover {
+    background: color-mix(in oklab, var(--pi-canvas) 88%, white 12%);
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.2);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .home-aurora {
+      animation: aurora-drift 12s ease-in-out infinite alternate;
+    }
+
+    .home-intro,
+    .home-composer,
+    .home-suggestions,
+    .home-hint {
+      animation: home-enter 460ms cubic-bezier(0.2, 0, 0, 1) both;
+    }
+
+    .home-composer { animation-delay: 60ms; }
+    .home-suggestions { animation-delay: 120ms; }
+    .home-hint { animation-delay: 180ms; }
+
+    .message-turn {
+      animation: turn-enter 300ms cubic-bezier(0.2, 0, 0, 1) both;
+    }
+  }
+
+  @keyframes aurora-drift {
+    from { transform: translate(-52%, -49%) scale(0.96) rotate(-2deg); }
+    to { transform: translate(-48%, -51%) scale(1.04) rotate(2deg); }
+  }
+
+  @keyframes home-enter {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes turn-enter {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
   }
 </style>

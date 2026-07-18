@@ -1,13 +1,33 @@
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
+import mermaid from "astro-mermaid";
 
 export default defineConfig({
   site: "https://pi-gui.pages.dev",
   integrations: [
+    mermaid({
+      autoTheme: true,
+      enableLog: false,
+      mermaidConfig: {
+        fontFamily:
+          '-apple-system, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+        themeVariables: {
+          fontSize: "14px",
+        },
+        flowchart: {
+          curve: "linear",
+          htmlLabels: true,
+        },
+      },
+    }),
     starlight({
       title: "pi-gui",
       description: "A localhost multi-session web UI for pi.",
       favicon: "/favicon.svg",
+      logo: {
+        src: "./src/assets/favicon.svg",
+        alt: "pi-gui",
+      },
       social: [
         {
           icon: "github",
@@ -19,6 +39,9 @@ export default defineConfig({
         baseUrl: "https://github.com/ankitchouhan1020/pi-gui-extension/edit/main/docs/",
       },
       customCss: ["./src/styles/custom.css"],
+      components: {
+        ThemeSelect: "./src/components/ThemeToggle.astro",
+      },
       sidebar: [
         {
           label: "Start here",

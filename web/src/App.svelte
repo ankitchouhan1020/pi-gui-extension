@@ -38,6 +38,7 @@
   let sidebarOpen = $state(
     (() => {
       try {
+        if (window.matchMedia("(max-width: 767px)").matches) return false;
         return localStorage.getItem(SIDEBAR_KEY) !== "0";
       } catch {
         return true;

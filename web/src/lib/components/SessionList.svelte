@@ -2,6 +2,7 @@
   import type { SessionRow } from "$lib/api";
   import Separator from "agentic-ui-kit/components/ui/separator.svelte";
   import ThemeToggle from "agentic-ui-kit/components/ui/theme-toggle.svelte";
+  import SoundToggle from "$lib/components/SoundToggle.svelte";
   import Plus from "@lucide/svelte/icons/plus";
   import Folder from "@lucide/svelte/icons/folder";
   import FolderOpen from "@lucide/svelte/icons/folder-open";
@@ -49,7 +50,7 @@
   const WIDTH_KEY = "pi-gui-sidebar-width";
   const WIDTH_MIN = 200;
   const WIDTH_MAX = 480;
-  const WIDTH_DEFAULT = 320;
+  const WIDTH_DEFAULT = 360;
   const ACTIVE_MS = 24 * 60 * 60 * 1000;
   const RECENT_PAGE = 5;
 
@@ -59,7 +60,9 @@
 
   function loadWidth(): number {
     try {
-      const n = Number(localStorage.getItem(WIDTH_KEY));
+      const raw = localStorage.getItem(WIDTH_KEY);
+      if (raw === null) return WIDTH_DEFAULT;
+      const n = Number(raw);
       return Number.isFinite(n) ? clampWidth(n) : WIDTH_DEFAULT;
     } catch {
       return WIDTH_DEFAULT;
@@ -224,8 +227,7 @@
     if (s.name) return s.name;
     if (s.sessionName) return s.sessionName;
     if (s.firstMessage?.trim()) {
-      const t = s.firstMessage.trim().replace(/\s+/g, " ");
-      return t.length > 48 ? t.slice(0, 48) + "…" : t;
+      return s.firstMessage.trim().replace(/\s+/g, " ");
     }
     return s.id.slice(0, 8);
   }
@@ -342,9 +344,10 @@
   >
     <div class="flex min-w-0 items-center gap-2">
       <img src="/favicon.svg" alt="" width="22" height="22" class="size-[22px] shrink-0 rounded-[5px]" />
-      <div class="min-w-0 text-sm font-semibold tracking-tight">pi-gui</div>
+      <div class="min-w-0 whitespace-nowrap text-sm font-semibold tracking-tight">pi-gui</div>
     </div>
     <div class="flex shrink-0 items-center gap-0.5">
+      <SoundToggle />
       <ThemeToggle mode="toggle" />
       {#if onCollapse}
         <button
@@ -364,7 +367,7 @@
     <div class="flex flex-col gap-0.5 p-2">
       <button
         type="button"
-        class="mb-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm font-medium transition-colors hover:bg-muted/80
+        class="pi-tactile mb-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm font-medium transition-[background-color,transform] hover:bg-muted/80
           {!selectedId ? 'bg-muted' : ''}"
         onclick={() => onNew()}
       >
@@ -389,11 +392,12 @@
             ondragover={(e) => onFolderDragOver(e, g.key)}
           >
             <div
-              class="group flex w-full items-center gap-0.5 rounded-md text-xs font-medium text-foreground hover:bg-muted/80"
+              class="sidebar-row group flex w-full items-center rounded-md text-xs font-medium text-foreground hover:bg-muted/80"
+              class:has-two-actions={Boolean(g.cwd)}
             >
               <button
                 type="button"
-                class="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-left"
+                class="sidebar-row-main flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-left"
                 title={g.cwd || undefined}
                 onclick={() => toggle(g.key)}
               >
@@ -409,28 +413,30 @@
                 {/if}
                 <span class="min-w-0 flex-1 truncate">{g.name}</span>
               </button>
-              <button
-                type="button"
-                class="flex size-6 shrink-0 cursor-grab items-center justify-center rounded-md text-muted-foreground opacity-0 hover:bg-muted hover:text-foreground active:cursor-grabbing group-hover:opacity-100 focus-visible:opacity-100"
-                title="Drag to reorder"
-                aria-label="Drag to reorder {g.name}"
-                draggable="true"
-                ondragstart={(e) => onFolderDragStart(e, g.key)}
-                ondragend={onDragEnd}
-              >
-                <GripVertical class="size-3.5" />
-              </button>
-              {#if g.cwd}
+              <div class="sidebar-row-actions">
                 <button
                   type="button"
-                  class="mr-1 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 hover:bg-muted hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
-                  title="New session in {g.name}"
-                  aria-label="New session in {g.name}"
-                  onclick={() => onNew(g.cwd)}
+                  class="flex size-6 shrink-0 cursor-grab items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground active:cursor-grabbing"
+                  title="Drag to reorder"
+                  aria-label="Drag to reorder {g.name}"
+                  draggable="true"
+                  ondragstart={(e) => onFolderDragStart(e, g.key)}
+                  ondragend={onDragEnd}
                 >
-                  <Plus class="size-3.5" />
+                  <GripVertical class="size-3.5" />
                 </button>
-              {/if}
+                {#if g.cwd}
+                  <button
+                    type="button"
+                    class="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                    title="New session in {g.name}"
+                    aria-label="New session in {g.name}"
+                    onclick={() => onNew(g.cwd)}
+                  >
+                    <Plus class="size-3.5" />
+                  </button>
+                {/if}
+              </div>
             </div>
             {#if open}
               <ul class="ml-3 flex flex-col gap-0.5 border-l border-border pl-2">
@@ -441,12 +447,12 @@
                     ondragover={(e) => onSessionDragOver(e, s, g.key)}
                   >
                     <div
-                      class="group/item flex items-center gap-0.5 rounded-lg transition-colors hover:bg-muted/80
+                      class="sidebar-row has-two-actions group/item flex items-center rounded-lg transition-colors hover:bg-muted/80
                         {selectedId === s.id ? 'bg-muted' : ''}"
                     >
                       <button
                         type="button"
-                        class="min-w-0 flex-1 rounded-lg px-2 py-1.5 text-left"
+                        class="sidebar-row-main pi-tactile min-w-0 rounded-lg px-2 py-1.5 text-left"
                         onclick={() => selectSession(s)}
                       >
                         <div class="flex min-w-0 items-center gap-1.5">
@@ -472,26 +478,28 @@
                           {/if}
                         </div>
                       </button>
-                      <button
-                        type="button"
-                        class="flex size-6 shrink-0 cursor-grab items-center justify-center rounded-md text-muted-foreground opacity-0 hover:bg-muted hover:text-foreground active:cursor-grabbing group-hover/item:opacity-100 focus-visible:opacity-100"
-                        title="Drag to reorder"
-                        aria-label="Drag to reorder session"
-                        draggable="true"
-                        ondragstart={(e) => onSessionDragStart(e, s, g.key)}
-                        ondragend={onDragEnd}
-                      >
-                        <GripVertical class="size-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        class="mr-0.5 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 hover:bg-muted hover:text-foreground group-hover/item:opacity-100 focus-visible:opacity-100"
-                        title="Move to Recent"
-                        aria-label="Move to Recent"
-                        onclick={(e) => moveToRecent(s, e)}
-                      >
-                        <Archive class="size-3.5" />
-                      </button>
+                      <div class="sidebar-row-actions">
+                        <button
+                          type="button"
+                          class="flex size-6 shrink-0 cursor-grab items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground active:cursor-grabbing"
+                          title="Drag to reorder"
+                          aria-label="Drag to reorder session"
+                          draggable="true"
+                          ondragstart={(e) => onSessionDragStart(e, s, g.key)}
+                          ondragend={onDragEnd}
+                        >
+                          <GripVertical class="size-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          class="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                          title="Move to Recent"
+                          aria-label="Move to Recent"
+                          onclick={(e) => moveToRecent(s, e)}
+                        >
+                          <Archive class="size-3.5" />
+                        </button>
+                      </div>
                     </div>
                   </li>
                 {/each}
@@ -601,3 +609,42 @@
     }}
   ></div>
 </aside>
+
+<style>
+  .sidebar-row {
+    position: relative;
+  }
+
+  .sidebar-row-main {
+    width: 100%;
+  }
+
+  .sidebar-row-actions {
+    position: absolute;
+    top: 50%;
+    right: 0.125rem;
+    display: flex;
+    align-items: center;
+    gap: 0.125rem;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-50%);
+    transition: opacity 140ms cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  .sidebar-row:hover .sidebar-row-main,
+  .sidebar-row:focus-within .sidebar-row-main {
+    padding-right: 2.25rem;
+  }
+
+  .sidebar-row.has-two-actions:hover .sidebar-row-main,
+  .sidebar-row.has-two-actions:focus-within .sidebar-row-main {
+    padding-right: 3.75rem;
+  }
+
+  .sidebar-row:hover .sidebar-row-actions,
+  .sidebar-row:focus-within .sidebar-row-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+</style>

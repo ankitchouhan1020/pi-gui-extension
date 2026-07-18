@@ -1,51 +1,21 @@
 ---
-title: Welcome to pi-gui
+title: pi-gui
 description: A localhost multi-session web UI for pi.
+template: splash
+hero:
+  title: The browser workspace for pi.
+  tagline: Keep pi's agent, tools, models, and sessions. Add a fast multi-session interface that stays entirely on your machine.
+  actions:
+    - text: Install the extension
+      link: /getting-started/install/
+      variant: primary
+    - text: See how it works
+      link: /concepts/architecture/
+      variant: minimal
+  image:
+    html: '<div class="pi-orbit" aria-hidden="true"><div class="orbit-ring orbit-ring-one"></div><div class="orbit-ring orbit-ring-two"></div><div class="orbit-core"><img src="/favicon.svg" alt=""><span>pi</span></div><span class="orbit-node node-tools">tools</span><span class="orbit-node node-models">models</span><span class="orbit-node node-sessions">sessions</span><span class="stream-dot dot-one"></span><span class="stream-dot dot-two"></span><span class="stream-dot dot-three"></span></div>'
 ---
 
-pi-gui is a fast, local browser interface for the same agent, tools, models,
-and sessions you already use in pi. It adds a multi-session workspace without
-introducing another runtime, authentication system, or source of truth.
+import HomeExperience from '../../components/HomeExperience.astro';
 
-**pi remains the agent. pi-gui is the browser shell around it.**
-
----
-
-## Start here
-
-Install the extension from npm:
-
-```bash
-pi install npm:pi-gui-extension
-```
-
-Then run `/gui` in any pi session. pi-gui starts locally, attaches the live
-session, and opens it in your browser.
-
-- [Install and use pi-gui](/getting-started/install/)
-- [Understand how pi-gui relates to pi](/concepts/ownership/)
-- [Learn the system architecture](/concepts/architecture/)
-
----
-
-## Customize the package
-
-The extension keeps its core small and documents the safe places to change its
-behavior. Message renderers and themes live at the edges; session ownership and
-streaming stay stable at the center.
-
-- [Choose an extension path](/extend/)
-- [Add a message plugin](/extend/plugins/)
-- [Customize the theme](/extend/theme/)
-- [Review change boundaries](/contributing/boundaries/)
-
----
-
-## Build against pi-gui
-
-The browser communicates with the local host through a small REST API and an
-SSE stream. Start with the contracts rather than the implementation.
-
-- [HTTP API](/reference/api/)
-- [SSE and client stream](/reference/events/)
-- [Repository layout](/reference/layout/)
+<HomeExperience />

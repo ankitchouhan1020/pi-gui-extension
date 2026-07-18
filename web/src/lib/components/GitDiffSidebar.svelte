@@ -47,7 +47,7 @@
   const WRAP_KEY = "pi-gui-git-diff-wrap";
   const WIDTH_MIN = 280;
   const WIDTH_MAX = 640;
-  const WIDTH_DEFAULT = 380;
+  const WIDTH_DEFAULT = 440;
 
   function clampWidth(n: number) {
     return Math.min(WIDTH_MAX, Math.max(WIDTH_MIN, Math.round(n)));
@@ -55,7 +55,9 @@
 
   function loadWidth(): number {
     try {
-      const n = Number(localStorage.getItem(WIDTH_KEY));
+      const raw = localStorage.getItem(WIDTH_KEY);
+      if (raw === null) return WIDTH_DEFAULT;
+      const n = Number(raw);
       return Number.isFinite(n) ? clampWidth(n) : WIDTH_DEFAULT;
     } catch {
       return WIDTH_DEFAULT;

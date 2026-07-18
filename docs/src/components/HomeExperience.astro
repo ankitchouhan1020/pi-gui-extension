@@ -1,0 +1,652 @@
+<div class="home-experience not-content">
+  <section class="proof-strip" aria-label="pi-gui operating principles">
+    <div>
+      <strong>127.0.0.1</strong>
+      <span>local only</span>
+    </div>
+    <div>
+      <strong>1 runtime</strong>
+      <span>pi stays the agent</span>
+    </div>
+    <div>
+      <strong>many sessions</strong>
+      <span>one browser workspace</span>
+    </div>
+    <div>
+      <strong>REST + SSE</strong>
+      <span>small, inspectable surface</span>
+    </div>
+  </section>
+
+  <section class="experience-section flow-section">
+    <div class="section-heading">
+      <p class="eyebrow">Live system map</p>
+      <h2>Follow one turn through pi-gui</h2>
+      <p>Select a stage to see what it owns. The browser remains a thin shell; agent power stays in pi.</p>
+    </div>
+
+    <pi-flow class="flow-demo">
+      <div class="flow-track" aria-label="Request flow">
+        <button type="button" data-stage="command" aria-pressed="true">
+          <span class="stage-index">01</span>
+          <strong>/gui</strong>
+          <small>attach</small>
+        </button>
+        <span class="flow-line"><i></i></span>
+        <button type="button" data-stage="browser" aria-pressed="false">
+          <span class="stage-index">02</span>
+          <strong>Browser</strong>
+          <small>interact</small>
+        </button>
+        <span class="flow-line"><i></i></span>
+        <button type="button" data-stage="hub" aria-pressed="false">
+          <span class="stage-index">03</span>
+          <strong>SessionHub</strong>
+          <small>coordinate</small>
+        </button>
+        <span class="flow-line"><i></i></span>
+        <button type="button" data-stage="agent" aria-pressed="false">
+          <span class="stage-index">04</span>
+          <strong>AgentSession</strong>
+          <small>run</small>
+        </button>
+      </div>
+      <div class="flow-detail" aria-live="polite">
+        <span data-stage-label>/gui · attach</span>
+        <p data-stage-copy>Starts the local host inside pi and attaches the current live terminal session.</p>
+      </div>
+    </pi-flow>
+  </section>
+
+  <section class="experience-section paths-section">
+    <div class="section-heading row-heading">
+      <div>
+        <p class="eyebrow">Choose a path</p>
+        <h2>Start with the task, not the file tree</h2>
+      </div>
+      <nav class="topic-chips" aria-label="Documentation topics">
+        <a href="/getting-started/">Start</a>
+        <a href="/extend/">Extend</a>
+        <a href="/recipes/">Recipes</a>
+        <a href="/reference/api/">Reference</a>
+      </nav>
+    </div>
+
+    <div class="path-grid">
+      <a class="path-card accent-card" href="/getting-started/install/">
+        <span class="card-meta">01 · START</span>
+        <h3>Open your first session</h3>
+        <p>Install the Pi extension, run <code>/gui</code>, and keep working with the same authenticated agent.</p>
+        <span class="card-action">Install and use <b>↗</b></span>
+      </a>
+      <a class="path-card" href="/concepts/ownership/">
+        <span class="card-meta">02 · UNDERSTAND</span>
+        <h3>Know who owns what</h3>
+        <p>Learn how the TUI, browser, live AgentSession objects, and durable session files fit together.</p>
+        <span class="card-action">Ownership model <b>↗</b></span>
+      </a>
+      <a class="path-card" href="/extend/plugins/">
+        <span class="card-meta">03 · CUSTOMIZE</span>
+        <h3>Add a message renderer</h3>
+        <p>Teach the UI a new message type without changing the session hub or streaming protocol.</p>
+        <span class="card-action">Message plugins <b>↗</b></span>
+      </a>
+      <a class="path-card" href="/extend/theme/">
+        <span class="card-meta">04 · THEME</span>
+        <h3>Make the interface yours</h3>
+        <p>Change light and dark tokens while preserving the package's existing theme and FOUC behavior.</p>
+        <span class="card-action">Theme guide <b>↗</b></span>
+      </a>
+      <a class="path-card" href="/recipes/">
+        <span class="card-meta">05 · BUILD</span>
+        <h3>Follow a focused recipe</h3>
+        <p>Make task-sized changes with explicit read, edit, avoid, and verification boundaries.</p>
+        <span class="card-action">Browse recipes <b>↗</b></span>
+      </a>
+      <a class="path-card" href="/reference/api/">
+        <span class="card-meta">06 · INTEGRATE</span>
+        <h3>Use the local API</h3>
+        <p>Build against the small REST surface and resumable SSE stream instead of coupling to internals.</p>
+        <span class="card-action">API reference <b>↗</b></span>
+      </a>
+    </div>
+  </section>
+
+  <section class="experience-section install-section">
+    <div class="install-copy">
+      <p class="eyebrow">One command</p>
+      <h2>Install it where pi already lives</h2>
+      <p>No second CLI, account, or configuration system. The extension is the product.</p>
+    </div>
+    <install-command class="install-command">
+      <span class="prompt" aria-hidden="true">$</span>
+      <code>pi install npm:pi-gui-extension</code>
+      <button type="button" aria-label="Copy install command">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect width="14" height="14" x="8" y="8" rx="2"></rect>
+          <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path>
+        </svg>
+        <span>Copy</span>
+      </button>
+      <span class="copy-status" aria-live="polite"></span>
+    </install-command>
+  </section>
+</div>
+
+<script>
+  const stages = {
+    command: {
+      label: "/gui · attach",
+      copy: "Starts the local host inside pi and attaches the current live terminal session.",
+    },
+    browser: {
+      label: "Browser · interact",
+      copy: "Sends commands over REST and receives ordered agent events over a resumable SSE stream.",
+    },
+    hub: {
+      label: "SessionHub · coordinate",
+      copy: "Keeps multiple sessions open, serializes turns per session, and protects live-writer ownership.",
+    },
+    agent: {
+      label: "AgentSession · run",
+      copy: "Pi owns the model, tools, skills, extensions, authentication, and durable session history.",
+    },
+  } as const;
+
+  class PiFlow extends HTMLElement {
+    connectedCallback() {
+      const label = this.querySelector<HTMLElement>("[data-stage-label]");
+      const copy = this.querySelector<HTMLElement>("[data-stage-copy]");
+      const buttons = [...this.querySelectorAll<HTMLButtonElement>("button[data-stage]")];
+
+      for (const button of buttons) {
+        button.addEventListener("click", () => {
+          const stage = stages[button.dataset.stage as keyof typeof stages];
+          if (!stage || !label || !copy) return;
+          for (const item of buttons) item.setAttribute("aria-pressed", String(item === button));
+          label.textContent = stage.label;
+          copy.textContent = stage.copy;
+        });
+      }
+    }
+  }
+
+  class InstallCommand extends HTMLElement {
+    connectedCallback() {
+      const button = this.querySelector<HTMLButtonElement>("button");
+      const label = button?.querySelector("span");
+      const status = this.querySelector<HTMLElement>(".copy-status");
+      button?.addEventListener("click", async () => {
+        await navigator.clipboard.writeText("pi install npm:pi-gui-extension");
+        if (label) label.textContent = "Copied";
+        if (status) status.textContent = "Install command copied";
+        window.setTimeout(() => {
+          if (label) label.textContent = "Copy";
+          if (status) status.textContent = "";
+        }, 1800);
+      });
+    }
+  }
+
+  if (!customElements.get("pi-flow")) customElements.define("pi-flow", PiFlow);
+  if (!customElements.get("install-command")) customElements.define("install-command", InstallCommand);
+</script>
+
+<style>
+  .home-experience {
+    width: min(100%, 67.5rem);
+    margin-inline: auto;
+    color: var(--sl-color-gray-1);
+  }
+
+  .proof-strip {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    border-block: 1px solid var(--sl-color-gray-5);
+  }
+
+  .proof-strip > div {
+    display: grid;
+    gap: 0.2rem;
+    padding: 1.25rem 1.5rem;
+  }
+
+  .proof-strip > div + div {
+    border-inline-start: 1px solid var(--sl-color-gray-5);
+  }
+
+  .proof-strip strong {
+    color: var(--sl-color-white);
+    font-family: var(--sl-font-mono);
+    font-size: 0.82rem;
+    font-weight: 600;
+  }
+
+  .proof-strip span {
+    color: var(--sl-color-gray-3);
+    font-size: 0.78rem;
+  }
+
+  .experience-section {
+    padding-block: clamp(4rem, 8vw, 7rem);
+  }
+
+  .experience-section + .experience-section {
+    border-top: 1px solid var(--sl-color-gray-5);
+  }
+
+  .section-heading {
+    max-width: 40rem;
+    margin-bottom: 2.25rem;
+  }
+
+  .section-heading h2,
+  .install-copy h2 {
+    margin: 0;
+    color: var(--sl-color-white);
+    font-size: clamp(1.75rem, 4vw, 2.5rem);
+    font-weight: 700;
+    line-height: 1.12;
+    letter-spacing: -0.025em;
+  }
+
+  .section-heading > p:last-child,
+  .install-copy > p:last-child {
+    margin: 0.9rem 0 0;
+    color: var(--sl-color-gray-2);
+    font-size: 1rem;
+    line-height: 1.65;
+  }
+
+  .eyebrow {
+    margin: 0 0 0.75rem;
+    color: var(--sl-color-accent);
+    font-family: var(--sl-font-mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .flow-demo {
+    display: block;
+    overflow: hidden;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.8rem;
+    background:
+      radial-gradient(circle at 18% 0%, color-mix(in srgb, var(--sl-color-accent) 10%, transparent), transparent 32%),
+      var(--sl-color-black);
+  }
+
+  .flow-track {
+    display: grid;
+    grid-template-columns: minmax(8rem, 1fr) 3rem minmax(8rem, 1fr) 3rem minmax(8rem, 1fr) 3rem minmax(8rem, 1fr);
+    align-items: center;
+    padding: 2rem;
+  }
+
+  .flow-track button {
+    display: grid;
+    min-height: 8.5rem;
+    align-content: space-between;
+    padding: 1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.65rem;
+    background: color-mix(in srgb, var(--sl-color-black) 82%, var(--sl-color-gray-6));
+    color: var(--sl-color-gray-2);
+    text-align: start;
+    cursor: pointer;
+    transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+  }
+
+  .flow-track button:hover {
+    transform: translateY(-2px);
+    border-color: var(--sl-color-gray-4);
+  }
+
+  .flow-track button[aria-pressed="true"] {
+    border-color: var(--sl-color-accent);
+    background: var(--sl-color-accent-low);
+    color: var(--sl-color-accent-high);
+  }
+
+  .flow-track strong {
+    color: var(--sl-color-white);
+    font-size: 0.95rem;
+  }
+
+  .flow-track small,
+  .stage-index {
+    font-family: var(--sl-font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .stage-index {
+    color: var(--sl-color-gray-3);
+  }
+
+  .flow-line {
+    position: relative;
+    height: 1px;
+    overflow: hidden;
+    background: var(--sl-color-gray-5);
+  }
+
+  .flow-line i {
+    position: absolute;
+    top: -2px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--sl-color-accent);
+    animation: stream 2.4s linear infinite;
+  }
+
+  .flow-line:nth-of-type(2) i { animation-delay: 0.55s; }
+  .flow-line:nth-of-type(3) i { animation-delay: 1.1s; }
+
+  .flow-detail {
+    display: grid;
+    grid-template-columns: 12rem 1fr;
+    gap: 2rem;
+    padding: 1.2rem 2rem;
+    border-top: 1px solid var(--sl-color-gray-5);
+    background: var(--sl-color-gray-7);
+  }
+
+  .flow-detail span {
+    color: var(--sl-color-white);
+    font-family: var(--sl-font-mono);
+    font-size: 0.78rem;
+    font-weight: 600;
+  }
+
+  .flow-detail p {
+    margin: 0;
+    color: var(--sl-color-gray-2);
+    font-size: 0.88rem;
+    line-height: 1.5;
+  }
+
+  .row-heading {
+    display: flex;
+    max-width: none;
+    align-items: end;
+    justify-content: space-between;
+    gap: 2rem;
+  }
+
+  .topic-chips {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.45rem;
+  }
+
+  .topic-chips a {
+    padding: 0.45rem 0.72rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    color: var(--sl-color-gray-2);
+    font-size: 0.78rem;
+    text-decoration: none;
+    transition: border-color 150ms ease, color 150ms ease, background 150ms ease;
+  }
+
+  .topic-chips a:hover {
+    border-color: var(--sl-color-gray-4);
+    background: var(--sl-color-gray-6);
+    color: var(--sl-color-white);
+  }
+
+  .path-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.85rem;
+  }
+
+  .path-card {
+    display: flex;
+    min-height: 15rem;
+    flex-direction: column;
+    padding: 1.4rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.8rem;
+    background: var(--sl-color-black);
+    color: inherit;
+    text-decoration: none;
+    transition: transform 170ms ease, border-color 170ms ease, box-shadow 170ms ease;
+  }
+
+  .path-card:hover {
+    transform: translateY(-3px);
+    border-color: var(--sl-color-gray-4);
+    box-shadow: 0 14px 34px color-mix(in srgb, var(--sl-color-white) 7%, transparent);
+  }
+
+  .accent-card {
+    background:
+      linear-gradient(145deg, color-mix(in srgb, var(--sl-color-accent-low) 72%, transparent), transparent 70%),
+      var(--sl-color-black);
+  }
+
+  .card-meta {
+    color: var(--sl-color-gray-3);
+    font-family: var(--sl-font-mono);
+    font-size: 0.67rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+  }
+
+  .path-card h3 {
+    margin: 1.6rem 0 0.6rem;
+    color: var(--sl-color-white);
+    font-size: 1.05rem;
+    font-weight: 650;
+    line-height: 1.3;
+  }
+
+  .path-card p {
+    margin: 0;
+    color: var(--sl-color-gray-2);
+    font-size: 0.87rem;
+    line-height: 1.55;
+  }
+
+  .path-card code {
+    color: var(--sl-color-white);
+    font-family: var(--sl-font-mono);
+    font-weight: 600;
+  }
+
+  .card-action {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: auto;
+    padding-top: 1.5rem;
+    color: var(--sl-color-gray-2);
+    font-size: 0.78rem;
+  }
+
+  .card-action b {
+    color: var(--sl-color-white);
+    font-size: 1rem;
+    transition: transform 150ms ease;
+  }
+
+  .path-card:hover .card-action b {
+    transform: translate(2px, -2px);
+  }
+
+  .install-section {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(28rem, 1.2fr);
+    align-items: center;
+    gap: 4rem;
+  }
+
+  .install-command {
+    position: relative;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 0.8rem;
+    padding: 0.75rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.75rem;
+    background: var(--sl-color-gray-7);
+  }
+
+  .install-command .prompt {
+    padding-inline-start: 0.35rem;
+    color: var(--sl-color-accent);
+    font-family: var(--sl-font-mono);
+  }
+
+  .install-command code {
+    overflow: hidden;
+    color: var(--sl-color-white);
+    font-family: var(--sl-font-mono);
+    font-size: 0.8rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .install-command button {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.52rem 0.65rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    background: var(--sl-color-black);
+    color: var(--sl-color-gray-2);
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+
+  .install-command button:hover {
+    color: var(--sl-color-white);
+  }
+
+  .install-command svg {
+    width: 0.85rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .copy-status {
+    position: absolute;
+    top: calc(100% + 0.45rem);
+    right: 0;
+    color: var(--sl-color-gray-3);
+    font-size: 0.7rem;
+  }
+
+  @keyframes stream {
+    from { left: -5px; }
+    to { left: 100%; }
+  }
+
+  @media (max-width: 56rem) {
+    .proof-strip,
+    .path-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+
+    .proof-strip > div:nth-child(3) {
+      border-inline-start: 0;
+    }
+
+    .proof-strip > div:nth-child(n + 3) {
+      border-top: 1px solid var(--sl-color-gray-5);
+    }
+
+    .flow-track {
+      grid-template-columns: 1fr;
+      gap: 0.65rem;
+    }
+
+    .flow-track button {
+      min-height: auto;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 0.8rem;
+    }
+
+    .flow-line {
+      width: 1px;
+      height: 1.25rem;
+      margin-inline-start: 2rem;
+    }
+
+    .flow-line i {
+      display: none;
+    }
+
+    .flow-detail,
+    .install-section {
+      grid-template-columns: 1fr;
+      gap: 0.65rem;
+    }
+
+    .install-section {
+      gap: 2rem;
+    }
+
+    .row-heading {
+      display: grid;
+      align-items: start;
+    }
+
+    .topic-chips {
+      justify-content: flex-start;
+    }
+  }
+
+  @media (max-width: 38rem) {
+    .proof-strip,
+    .path-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .proof-strip > div + div {
+      border-inline-start: 0;
+      border-top: 1px solid var(--sl-color-gray-5);
+    }
+
+    .experience-section {
+      padding-block: 3.5rem;
+    }
+
+    .path-card {
+      min-height: 13rem;
+    }
+
+    .install-command {
+      grid-template-columns: auto minmax(0, 1fr) auto;
+    }
+
+    .install-command button span {
+      display: none;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .flow-line i {
+      display: none;
+    }
+
+    .flow-track button,
+    .path-card,
+    .card-action b {
+      transition: none;
+    }
+  }
+</style>
