@@ -63,7 +63,7 @@
     icon?: typeof Search;
     shortcut?: string;
     disabled?: boolean;
-    /** Secondary line under label (e.g. session meta). */
+    /** Compact supporting metadata shown beside the label (e.g. session meta). */
     caption?: string;
     /** Extra text for search (not shown). */
     keywords?: string;
@@ -107,6 +107,21 @@
     { keys: "⌃P", desc: "Cycle model forward" },
     { keys: "⇧⌃P", desc: "Cycle model backward" },
   ];
+
+  const CATEGORY_ORDER = [
+    "Recently used",
+    "Session",
+    "Recent",
+    "Agent",
+    "Model",
+    "Prompt",
+    "Skill",
+    "Extension",
+    "App",
+    "Help",
+  ];
+  const RECENT_COMMANDS_KEY = "pi-gui.recent-commands";
+  const RECENT_COMMANDS_MAX = 5;
 
   type Props = {
     open: boolean;
@@ -217,6 +232,39 @@
   /** Extension + prompt + skill slash commands (session.prompt `/name`). */
   let slashCommands = $state<SlashCommandInfo[]>([]);
   let continueCopied = $state(false);
+  let recentCommandIds = $state<string[]>([]);
+
+  function loadRecentCommands(): string[] {
+    try {
+      const value = JSON.parse(localStorage.getItem(RECENT_COMMANDS_KEY) || "[]");
+      if (!Array.isArray(value)) return [];
+      return value
+        .filter((id): id is string => typeof id === "string")
+        .slice(0, RECENT_COMMANDS_MAX);
+    } catch {
+      return [];
+    }
+  }
+
+  function rememberCommand(cmd: Command) {
+    // Session rows already have their own Recent section.
+    if (cmd.category === "Recent") return;
+    recentCommandIds = [
+      cmd.id,
+      ...recentCommandIds.filter((id) => id !== cmd.id),
+    ].slice(0, RECENT_COMMANDS_MAX);
+    try {
+      localStorage.setItem(RECENT_COMMANDS_KEY, JSON.stringify(recentCommandIds));
+    } catch {
+      /* Storage can be unavailable in private browsing. */
+    }
+  }
+
+  function executeCommand(cmd: Command) {
+    if (cmd.disabled) return;
+    rememberCommand(cmd);
+    void cmd.action();
+  }
 
   /** Shell-safe `pi --session <id>` for resuming this session in a terminal. */
   const continueCmd = $derived.by(() => {
@@ -439,7 +487,6 @@
       {
         id: "set-theme",
         label: `Theme: ${theme.value}`,
-        caption: "Cycle light → dark → system",
         category: "Display",
         icon: Sun,
         keywords: "settings appearance light dark system",
@@ -461,9 +508,7 @@
       {
         id: "set-scoped-models",
         label: "Scoped models",
-        caption: hasSession
-          ? "Enable/disable models for Ctrl+P cycling"
-          : "Open a session first",
+        caption: hasSession ? undefined : "Open a session first",
         category: "Agent",
         icon: Cpu,
         keywords: "settings scoped models cycle ctrl+p allowlist",
@@ -489,9 +534,7 @@
       {
         id: "set-skills",
         label: "Skills",
-        caption: hasSession
-          ? "Browse, create, edit, import, and run skills"
-          : "Open a session first",
+        caption: hasSession ? undefined : "Open a session first",
         category: "Agent",
         icon: Sparkles,
         keywords: "settings skills",
@@ -504,7 +547,7 @@
       {
         id: "set-extensions",
         label: "Extensions",
-        caption: hasSession ? "Loaded extensions" : "Open a session first",
+        caption: hasSession ? undefined : "Open a session first",
         category: "Agent",
         icon: Blocks,
         keywords: "settings extensions plugins",
@@ -517,9 +560,7 @@
       {
         id: "set-info",
         label: "Session",
-        caption: hasSession
-          ? "Session file, ID, messages, tokens, cost"
-          : "Open a session first",
+        caption: hasSession ? undefined : "Open a session first",
         category: "Session",
         icon: Info,
         keywords: "settings session info stats id",
@@ -1288,7 +1329,6 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
       label: "Import",
       category: "Session",
       icon: FolderOpen,
-      caption: "Import and resume a session from a JSONL file",
       keywords: "session import jsonl /import",
       action: openImport,
     });
@@ -1298,7 +1338,6 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
       label: "Resume session",
       category: "Session",
       icon: FileText,
-      caption: "Pick from previous sessions",
       keywords: "resume open recent switch session /resume",
       action: openResume,
     });
@@ -1308,7 +1347,6 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
       label: "Open session by ID",
       category: "Session",
       icon: Terminal,
-      caption: "Paste a session ID, path, or pi --session …",
       keywords:
         "resume terminal session id path open by id pi --session /resume attach continue",
       action: openById,
@@ -1320,7 +1358,6 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
         label: "Name",
         category: "Session",
         icon: Tag,
-        caption: "Set session display name",
         keywords: "rename name /name",
         action: openRename,
       });
@@ -1330,7 +1367,6 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
         label: "Compact",
         category: "Session",
         icon: Minimize2,
-        caption: "Manually compact the session context",
         keywords: "compact context summarize /compact",
         action: () => run(onCompact),
       });
@@ -1340,7 +1376,6 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
         label: "Copy",
         category: "Session",
         icon: Copy,
-        caption: "Copy last agent message to clipboard",
         keywords: "copy last assistant /copy",
         action: () => run(onCopyLast),
       });
@@ -1350,7 +1385,6 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
         label: "Share",
         category: "Session",
         icon: Share2,
-        caption: "Share session as a secret GitHub gist",
         keywords: "share gist /share",
         disabled: !session?.id,
         action: () => run(onShare),
@@ -1362,8 +1396,7 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
           label: "Copy pi --session",
           category: "Session",
           icon: Terminal,
-          caption: continueCmd,
-          keywords: "pi --session continue reconnect clipboard terminal resume",
+          keywords: `${continueCmd} pi --session continue reconnect clipboard terminal resume`,
           action: () => run(() => void copyContinueCmd()),
         });
       }
@@ -1373,7 +1406,6 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
         label: "Session",
         category: "Session",
         icon: Info,
-        caption: "Session file, ID, messages, tokens, and cost",
         keywords: "session info stats id /session",
         action: openInfo,
       });
@@ -1391,7 +1423,6 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
         label: "Model",
         category: "Model",
         icon: Cpu,
-        caption: "Select model",
         keywords: "/model",
         action: openModels,
       });
@@ -1401,7 +1432,6 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
         label: "Scoped models",
         category: "Model",
         icon: Cpu,
-        caption: "Enable/disable models for Ctrl+P cycling",
         keywords: "cycle ctrl+p allowlist enable disable scoped /scoped-models",
         action: openScopedModels,
       });
@@ -1468,7 +1498,7 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
         cmds.push({
           id: `slash-${cmd.source}-${cmd.name}`,
           label: `/${cmd.name}`,
-          caption: [hint, desc].filter(Boolean).join(" — ") || undefined,
+          caption: hint || undefined,
           category: slashCategory(cmd.source),
           icon: slashIcon(cmd.source),
           keywords: [cmd.source, cmd.scope, hint, desc, "slash", "command"]
@@ -1483,7 +1513,6 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
         label: "Tree",
         category: "Session",
         icon: GitBranch,
-        caption: "Navigate session tree (switch branches)",
         keywords: "tree branch navigate /tree",
         action: openTree,
       });
@@ -1493,7 +1522,6 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
         label: "Fork",
         category: "Session",
         icon: GitFork,
-        caption: "Create a new fork from a previous user message",
         keywords: "fork branch clone /fork",
         action: openFork,
       });
@@ -1503,7 +1531,6 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
         label: "Export",
         category: "Session",
         icon: Download,
-        caption: "Export session (HTML or JSONL)",
         keywords: "html jsonl download export session /export",
         action: openExport,
       });
@@ -1514,7 +1541,7 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
         category: "Agent",
         icon: Square,
         shortcut: "Esc",
-        caption: "Stop the agent turn",
+        keywords: "stop agent turn cancel",
         action: () => run(onAbort),
       });
     }
@@ -1524,7 +1551,6 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
       label: "Settings",
       category: "App",
       icon: Settings,
-      caption: "Open settings menu",
       keywords: "theme model thinking preferences /settings",
       action: openSettings,
     });
@@ -1534,7 +1560,6 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
       label: "Hotkeys",
       category: "Help",
       icon: Keyboard,
-      caption: "Show all keyboard shortcuts",
       keywords: "keyboard shortcuts /hotkeys",
       action: openHotkeys,
     });
@@ -1544,7 +1569,6 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
       label: "Changelog",
       category: "Help",
       icon: ScrollText,
-      caption: "Show changelog entries",
       keywords: "release notes version /changelog",
       action: openChangelog,
     });
@@ -1554,7 +1578,6 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
       label: "Quit",
       category: "App",
       icon: Power,
-      caption: "Quit pi-gui",
       keywords: "quit server exit stop /quit",
       action: () => void quitServer(),
     });
@@ -1633,11 +1656,33 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
 
   const grouped = $derived(() => {
     const map = new Map<string, Command[]>();
+    const q = query.trim();
+    const recent = q
+      ? []
+      : recentCommandIds
+          .map((id) => filtered.find((command) => command.id === id))
+          .filter((command): command is Command => Boolean(command));
+    const recentIds = new Set(recent.map((command) => command.id));
+    if (recent.length) map.set("Recently used", recent);
     for (const c of filtered) {
+      if (recentIds.has(c.id)) continue;
       if (!map.has(c.category)) map.set(c.category, []);
       map.get(c.category)!.push(c);
     }
-    return map;
+    for (const [category, items] of map) {
+      if (category === "Recently used") continue;
+      items.sort((a, b) =>
+        a.label.localeCompare(b.label, undefined, { sensitivity: "base" }),
+      );
+    }
+    return new Map(
+      [...map.entries()].sort(([a], [b]) => {
+        const ai = CATEGORY_ORDER.indexOf(a);
+        const bi = CATEGORY_ORDER.indexOf(b);
+        return (ai < 0 ? CATEGORY_ORDER.length : ai) -
+          (bi < 0 ? CATEGORY_ORDER.length : bi);
+      }),
+    );
   });
 
   const flatItems = $derived(
@@ -1652,6 +1697,7 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
     if (!open) return;
     query = "";
     selectedIndex = 0;
+    recentCommandIds = loadRecentCommands();
     void loadSlashCommands();
     untrack(() => {
       const b = boot;
@@ -2019,7 +2065,7 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
       e.preventDefault();
       const item = flatItems[selectedIndex];
       if (item && !item.disabled) {
-        void item.action();
+        executeCommand(item);
       }
       return;
     }
@@ -2601,7 +2647,7 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
               <button
                 data-index={i}
                 disabled={item.disabled}
-                class="mx-2 flex w-[calc(100%-1rem)] cursor-pointer items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40 {active
+                class="mx-2 flex w-[calc(100%-1rem)] cursor-pointer items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40 {active
                   ? 'bg-accent text-accent-foreground'
                   : 'hover:bg-accent/50 text-popover-foreground'}"
                 onclick={() => {
@@ -2610,10 +2656,10 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
                 type="button"
               >
                 <Icon class="size-4 shrink-0 opacity-70" />
-                <span class="flex min-w-0 flex-1 flex-col">
-                  <span class="truncate">{item.label}</span>
+                <span class="flex min-w-0 flex-1 items-baseline gap-2">
+                  <span class="shrink-0 truncate">{item.label}</span>
                   {#if item.caption}
-                    <span class="truncate text-[10px] opacity-60"
+                    <span class="min-w-0 truncate text-[10px] opacity-60"
                       >{item.caption}</span
                     >
                   {/if}
@@ -2937,15 +2983,15 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
         </div>
 
         <!-- List -->
-        <div bind:this={listRef} class="max-h-[50vh] overflow-y-auto py-2">
+        <div bind:this={listRef} class="max-h-[56vh] overflow-y-auto py-1.5">
           {#if flatItems.length === 0}
             <div class="px-4 py-6 text-center text-sm text-muted-foreground">
               No commands found
             </div>
           {:else}
             {#each Array.from(grouped().entries()) as [category, items]}
-              <div class="px-3 pb-1 pt-2">
-                <div class="px-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <div class="px-3 pb-0.5 pt-2 first:pt-1">
+                <div class="px-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/80">
                   {category}
                 </div>
               </div>
@@ -2955,18 +3001,16 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
                 {@const active = flatIdx === selectedIndex}
                 <button
                   data-index={flatIdx}
-                  class="mx-2 flex w-[calc(100%-1rem)] cursor-pointer items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors {active ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50 text-popover-foreground'}"
-                  onclick={() => {
-                    if (!cmd.disabled) void cmd.action();
-                  }}
+                  class="mx-2 flex w-[calc(100%-1rem)] cursor-pointer items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-sm transition-colors {active ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50 text-popover-foreground'}"
+                  onclick={() => executeCommand(cmd)}
                   type="button"
                 >
-                  <Icon class="size-4 shrink-0 opacity-70 {cmd.caption ? 'self-start mt-0.5' : ''}" />
-                  <span class="min-w-0 flex-1">
-                    <span class="block truncate">{cmd.label}</span>
+                  <Icon class="size-4 shrink-0 opacity-70" />
+                  <span class="flex min-w-0 flex-1 items-baseline gap-2">
+                    <span class="shrink-0 truncate">{cmd.label}</span>
                     {#if cmd.caption}
                       <span
-                        class="mt-0.5 block truncate text-[11px] {active
+                        class="min-w-0 truncate text-[11px] {active
                           ? 'text-accent-foreground/70'
                           : 'text-muted-foreground'}"
                       >
