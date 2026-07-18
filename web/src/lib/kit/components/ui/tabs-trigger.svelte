@@ -21,6 +21,6 @@
   )}
   {...restProps}
 >
-  <!-- Underline is a shared spring-animated indicator in TabsList -->
+  <!-- The parent tabs list owns any shared active indicator. -->
   {@render children?.()}
 </TabsPrimitive.Trigger>

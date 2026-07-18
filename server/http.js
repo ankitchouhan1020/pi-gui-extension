@@ -16,7 +16,7 @@ import {
 } from "./sse-protocol.js";
 
 /**
- * Host lifecycle for /api/shutdown (standalone exits; in-process stays alive).
+ * Host lifecycle for /api/shutdown (extension stays alive while the host closes).
  * @type {{ stayAlive: boolean, close: null | (() => Promise<unknown>) }}
  */
 const hostCtl = { stayAlive: false, close: null };
@@ -352,7 +352,7 @@ async function handleApi(req, res) {
       });
     }
 
-    // POST /api/shutdown — stop HTTP host (standalone exits; in-process only closes)
+    // POST /api/shutdown — stop the HTTP host without exiting Pi
     if (method === "POST" && pathname === "/api/shutdown") {
       json(res, 200, { ok: true });
       setTimeout(() => {

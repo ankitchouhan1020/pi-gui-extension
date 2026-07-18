@@ -1,8 +1,8 @@
 <script lang="ts">
   import type { HTMLAttributes } from "svelte/elements";
   import type { Snippet } from "svelte";
-  import { cn } from "$lib/utils.js";
-  import { useIsMobile } from "$lib/hooks/use-mobile.svelte.js";
+  import { cn } from "../../utils.js";
+  import { useIsMobile } from "../../hooks/use-mobile.svelte.js";
   import TooltipProvider from "./tooltip-provider.svelte";
   import {
     setSidebarContext,

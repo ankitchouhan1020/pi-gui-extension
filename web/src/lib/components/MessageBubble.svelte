@@ -64,15 +64,20 @@
       stuck = false;
       return;
     }
-    const root = bubbleEl.closest(".overflow-y-auto") as HTMLElement | null;
+    const el = bubbleEl;
+    const root = el.closest(".overflow-y-auto") as HTMLElement | null;
+    if (!root) {
+      stuck = false;
+      return;
+    }
     const measure = () => {
-      stuck = Boolean(root) && bubbleEl!.getBoundingClientRect().top <= root.getBoundingClientRect().top + 1;
+      stuck = el.getBoundingClientRect().top <= root.getBoundingClientRect().top + 1;
     };
     measure();
-    root?.addEventListener("scroll", measure, { passive: true });
+    root.addEventListener("scroll", measure, { passive: true });
     window.addEventListener("resize", measure);
     return () => {
-      root?.removeEventListener("scroll", measure);
+      root.removeEventListener("scroll", measure);
       window.removeEventListener("resize", measure);
     };
   });

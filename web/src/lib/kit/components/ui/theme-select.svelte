@@ -1,7 +1,7 @@
 <script lang="ts">
   /** Segmented light / dark / system control. */
-  import { cn } from "$lib/utils.js";
-  import { setTheme, theme, type Theme } from "$lib/theme.svelte.js";
+  import { cn } from "../../utils.js";
+  import { setTheme, theme, type Theme } from "../../theme.svelte.js";
 
   type Props = {
     class?: string;

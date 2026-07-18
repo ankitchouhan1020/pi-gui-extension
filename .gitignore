@@ -1,5 +1,8 @@
 node_modules/
 web/node_modules/
+docs/node_modules/
+docs/.astro/
+docs/dist/
 # package-root dist/ is committed for zero-build git installs
 web/dist/
 .DS_Store

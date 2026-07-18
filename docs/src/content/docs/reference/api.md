@@ -1,0 +1,53 @@
+---
+title: HTTP API
+description: REST routes exposed by the local pi-gui server.
+---
+
+Base: `http://127.0.0.1:$PI_GUI_PORT` (default `3847`). Dev Vite proxies `/api`.
+
+Source of truth: `server/http.js`. Client wrappers: `web/src/lib/api.ts`.
+
+## Global
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/health` | liveness (`ok`, open count, cwd) |
+| POST | `/api/shutdown` | close the extension's HTTP host |
+| GET | `/api/changelog` | pi package CHANGELOG (Cmd+K) |
+| GET | `/api/models?sessionId=` | models (optional warmed session) |
+| GET | `/api/fs?path=` | list subdirs (folder picker) |
+| GET | `/api/sessions?cwd=` | open + disk sessions (`running`, `bound` = live TUI attach) |
+| POST | `/api/sessions` | open/create (`path?`, `cwd?`, `fresh?`, `content?`, `filename?`) |
+
+## Session
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/sessions/:id` | detail + stats |
+| PATCH | `/api/sessions/:id` | rename (`{ name }`) |
+| DELETE | `/api/sessions/:id` | close hub session |
+| GET | `/api/sessions/:id/messages` | history snapshot |
+| POST | `/api/sessions/:id/prompt` | send turn (`{ message, images? }`) → **202** |
+| POST | `/api/sessions/:id/command` | execute a registered extension command |
+| POST | `/api/sessions/:id/steer` | interrupt while streaming → **202** |
+| POST | `/api/sessions/:id/follow-up` | queue after current turn |
+| POST | `/api/sessions/:id/abort` | stop agent turn |
+| POST | `/api/sessions/:id/bash` | `!command` (`{ command, excludeFromContext? }`) → **202** |
+| POST | `/api/sessions/:id/abort-bash` | stop bash |
+| POST | `/api/sessions/:id/model` | set / cycle model |
+| GET/POST | `/api/sessions/:id/scoped-models` | read / apply the model allowlist |
+| POST | `/api/sessions/:id/share` | share through Pi's configured GitHub integration |
+| GET/POST | `/api/sessions/:id/trust` | read / update project trust |
+| GET/POST | `/api/sessions/:id/thinking` | get / set / cycle thinking |
+| POST | `/api/sessions/:id/compact` | compact (`{ instructions? }`) |
+| GET/POST | `/api/sessions/:id/tree` | tree / navigate (`{ targetId, summarize?, … }`) |
+| GET/POST | `/api/sessions/:id/fork` | candidates / fork (`{ entryId, position? }`) |
+| GET/POST | `/api/sessions/:id/tools` | list / set active tools |
+| GET/POST | `/api/sessions/:id/skills` | skill workspace index / create or import user/project skill |
+| GET/PATCH | `/api/sessions/:id/skill-file` | read / save a loaded `SKILL.md` (`?path=` for GET) |
+| GET | `/api/sessions/:id/extensions` | loaded extensions |
+| GET | `/api/sessions/:id/commands` | slash commands (extension + prompt + skill) |
+| GET | `/api/sessions/:id/git` | working-tree status; `?path=` → file diff |
+| GET | `/api/sessions/:id/events` | **SSE** stream (`?after=` / `Last-Event-ID`) |
+
+Static UI: non-`/api` paths from package-root `dist/`.

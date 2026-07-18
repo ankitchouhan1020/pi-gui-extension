@@ -1,0 +1,51 @@
+---
+title: Welcome to pi-gui
+description: A localhost multi-session web UI for pi.
+---
+
+pi-gui is a fast, local browser interface for the same agent, tools, models,
+and sessions you already use in pi. It adds a multi-session workspace without
+introducing another runtime, authentication system, or source of truth.
+
+**pi remains the agent. pi-gui is the browser shell around it.**
+
+---
+
+## Start here
+
+Install the extension from npm:
+
+```bash
+pi install npm:pi-gui-extension
+```
+
+Then run `/gui` in any pi session. pi-gui starts locally, attaches the live
+session, and opens it in your browser.
+
+- [Install and use pi-gui](/getting-started/install/)
+- [Understand how pi-gui relates to pi](/concepts/ownership/)
+- [Learn the system architecture](/concepts/architecture/)
+
+---
+
+## Customize the package
+
+The extension keeps its core small and documents the safe places to change its
+behavior. Message renderers and themes live at the edges; session ownership and
+streaming stay stable at the center.
+
+- [Choose an extension path](/extend/)
+- [Add a message plugin](/extend/plugins/)
+- [Customize the theme](/extend/theme/)
+- [Review change boundaries](/contributing/boundaries/)
+
+---
+
+## Build against pi-gui
+
+The browser communicates with the local host through a small REST API and an
+SSE stream. Start with the contracts rather than the implementation.
+
+- [HTTP API](/reference/api/)
+- [SSE and client stream](/reference/events/)
+- [Repository layout](/reference/layout/)

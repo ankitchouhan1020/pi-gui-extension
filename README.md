@@ -1,6 +1,6 @@
 # pi-gui-extension
 
-Localhost web UI for [pi](https://pi.dev) — multi-session chat over the same coding-agent SDK as the terminal.
+Pi extension for a localhost multi-session web UI over the same coding-agent SDK as the terminal.
 
 ## Install
 
@@ -10,7 +10,9 @@ pi install npm:pi-gui-extension
 
 Requires Node.js ≥ 20 and a working pi install (models / auth already set up).
 
-Path install (`pi install ./pi-gui`): run `npm run build` first so package-root `dist/` exists (or use a clone that already commits it).
+Git and path installs work from the repository because package-root `dist/` is
+committed. After changing `web/`, run `npm install --prefix web && npm run build`
+before testing the local package with `pi install <path>`.
 
 ```bash
 pi remove npm:pi-gui-extension
@@ -30,14 +32,7 @@ In any pi session:
 
 `/gui` ensures the host runs in this process (takes over the port if needed), then opens the browser on the session. Pass a **session id** (or path) to target a specific chat; omit it to use the current TUI session.
 
-How this relates to pi (disk vs live, ownership): [docs/ownership.md](./docs/ownership.md).
-
-Or standalone:
-
-```bash
-npx pi-gui-extension
-# → http://127.0.0.1:3847
-```
+How this relates to pi (disk vs live, ownership): [ownership documentation](./docs/src/content/docs/concepts/ownership.md).
 
 Localhost only (`127.0.0.1`). No auth — treat it like the TUI on your machine.
 
@@ -66,4 +61,19 @@ Models, auth, skills, and extensions come from pi — this package does not add 
 
 [MIT](./LICENSE)
 
-Contributors and agents: see [docs/](./docs/index.md) and [AGENTS.md](./AGENTS.md).
+## Documentation
+
+Read the published documentation at
+[pi-gui.pages.dev](https://pi-gui.pages.dev/).
+
+The documentation is an Astro Starlight site with canonical content in
+`docs/src/content/docs/`.
+
+```bash
+npm install --prefix docs
+npm run dev:docs       # local docs server
+npm run build:docs     # static site in docs/dist/
+```
+
+Contributors should start with the [change boundaries](./docs/src/content/docs/contributing/boundaries.md)
+and [extension paths](./docs/src/content/docs/extend/index.md).

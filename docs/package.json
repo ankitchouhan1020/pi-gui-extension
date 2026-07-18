@@ -1,0 +1,19 @@
+{
+  "name": "pi-gui-docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro check && astro build",
+    "check": "astro check",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.41.3",
+    "astro": "7.1.1"
+  },
+  "devDependencies": {
+    "@astrojs/check": "latest",
+    "typescript": "latest"
+  }
+}

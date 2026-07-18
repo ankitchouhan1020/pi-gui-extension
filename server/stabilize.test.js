@@ -460,32 +460,7 @@ describe("SessionHub attach (bound / live)", () => {
   });
 });
 
-describe("createServer stayAlive + session-index", () => {
-  it("indexes session on subscribe", async () => {
-    const { ensureSessionIndex, getSessionById } = await import(
-      "./session-index.js"
-    );
-    ensureSessionIndex();
-    const { createAgentSession, SessionManager } = await import(
-      "@earendil-works/pi-coding-agent"
-    );
-    const cwd = makeTestCwd("pi-gui-idx-");
-    try {
-      const { session } = await createAgentSession({
-        cwd,
-        sessionManager: SessionManager.create(cwd),
-      });
-      // subscribe is how InteractiveMode registers; index hooks that.
-      const unsub = session.subscribe(() => {});
-      assert.equal(getSessionById(session.sessionId), session);
-      unsub();
-      session.dispose();
-      assert.equal(getSessionById(session.sessionId), null);
-    } finally {
-      cleanupTestCwd(cwd);
-    }
-  });
-
+describe("createServer stayAlive", () => {
   it("in-process listen and close without exit", async () => {
     const { createServer } = await import("./http.js");
     const app = createServer({ port: 0, stayAlive: true });

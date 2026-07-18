@@ -43,7 +43,6 @@ export { default as DropdownMenuSubTrigger } from "./dropdown-menu-sub-trigger.s
 export { default as DropdownMenuSubContent } from "./dropdown-menu-sub-content.svelte";
 
 export { default as Tabs } from "./tabs.svelte";
-export { default as TabsList } from "./tabs-list.svelte";
 export { default as TabsTrigger } from "./tabs-trigger.svelte";
 export { default as TabsContent } from "./tabs-content.svelte";
 
@@ -90,9 +89,6 @@ export { default as SidebarMenuSub } from "./sidebar-menu-sub.svelte";
 export { default as SidebarMenuSubItem } from "./sidebar-menu-sub-item.svelte";
 export { default as SidebarMenuSubButton } from "./sidebar-menu-sub-button.svelte";
 export { useSidebar } from "./sidebar-context.svelte.js";
-
-export { default as AnimatedBackground } from "./animated-background.svelte";
-export { default as TextMorph } from "./text-morph.svelte";
 
 export { default as ThemeToggle } from "./theme-toggle.svelte";
 export { default as ThemeSelect } from "./theme-select.svelte";

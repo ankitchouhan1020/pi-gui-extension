@@ -14,8 +14,8 @@ import { createServer } from "../server/http.js";
 import { hub } from "../server/hub.js";
 
 /**
- * Index live AgentSession by id. Must patch the same AgentSession class pi uses
- * (import here via jiti aliases — not via server/session-index.js nested resolve).
+ * Index live AgentSession by id. Must patch the same AgentSession class pi uses,
+ * imported here through Pi's extension loader aliases.
  */
 const sessionsById = new Map<string, InstanceType<typeof AgentSession>>();
 /** Hub ids of live-attached TUI sessions (multi-bind; detach per session). */
@@ -241,7 +241,7 @@ async function stopServer(port: number): Promise<"stopped" | "not_running"> {
 
   if (!(await isUp(port))) return "not_running";
 
-  // Foreign/standalone server — ask it to exit (or close if stayAlive)
+  // Existing compatible host from another Pi process — ask it to close
   try {
     await fetch(`http://127.0.0.1:${port}/api/shutdown`, { method: "POST" });
   } catch {

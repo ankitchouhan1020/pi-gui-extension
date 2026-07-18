@@ -6,8 +6,8 @@
   import Moon from "@lucide/svelte/icons/moon";
   import Sun from "@lucide/svelte/icons/sun";
   import Monitor from "@lucide/svelte/icons/monitor";
-  import { cn } from "$lib/utils.js";
-  import { setTheme, theme, type Theme } from "$lib/theme.svelte.js";
+  import { cn } from "../../utils.js";
+  import { setTheme, theme, type Theme } from "../../theme.svelte.js";
   import Button from "./button.svelte";
 
   type Props = {

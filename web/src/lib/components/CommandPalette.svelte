@@ -1642,7 +1642,7 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
 
   const flatItems = $derived(
     Array.from(grouped().entries()).flatMap(([cat, items]) =>
-      items.map((item) => ({ category: cat, ...item })),
+      items.map((item) => ({ ...item, category: cat })),
     ),
   );
 
