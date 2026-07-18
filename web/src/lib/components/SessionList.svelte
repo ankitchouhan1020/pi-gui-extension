@@ -369,17 +369,17 @@
         onclick={() => onNew()}
       >
         <MessageSquarePlus class="size-3.5 shrink-0 text-muted-foreground" />
-        <span class="min-w-0 flex-1 truncate">New Session</span>
+        <span class="min-w-0 flex-1 truncate">New session</span>
       </button>
 
       <Separator class="my-1.5" />
       <div class="px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        Active
+        Sessions
       </div>
 
       {#if openSessions.length === 0}
         <div class="px-2 py-6 text-center text-xs text-muted-foreground">
-          {listReady ? "No active sessions" : "Loading…"}
+          {listReady ? "No open sessions" : "Loading"}
         </div>
       {:else}
         {#each groups as g (g.key)}
@@ -453,11 +453,23 @@
                           {#if s.streaming}
                             <span
                               class="size-1.5 shrink-0 animate-pulse rounded-full bg-emerald-500"
-                              title="live"
-                              aria-label="live"
+                              title="Streaming"
+                              aria-label="Streaming"
+                            ></span>
+                          {:else if s.bound}
+                            <span
+                              class="size-1.5 shrink-0 rounded-full bg-sky-500"
+                              title="Live TUI session"
+                              aria-label="Live TUI session"
                             ></span>
                           {/if}
                           <span class="min-w-0 flex-1 truncate text-xs font-medium">{label(s)}</span>
+                          {#if s.bound}
+                            <span
+                              class="shrink-0 rounded px-1 py-px text-[9px] font-medium uppercase tracking-wide text-sky-600 dark:text-sky-400"
+                              title="Attached from pi TUI"
+                            >tui</span>
+                          {/if}
                         </div>
                       </button>
                       <button

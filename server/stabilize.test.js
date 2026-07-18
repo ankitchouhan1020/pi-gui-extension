@@ -4,11 +4,9 @@
  */
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { slimSseEvent, formatSseEvent } from "./http.js";
 import { SessionHub } from "./hub.js";
+import { makeTestCwd, cleanupTestCwd } from "./test-temp.js";
 
 describe("slimSseEvent", () => {
   it("strips assistantMessageEvent.partial", () => {
@@ -43,13 +41,17 @@ describe("SessionHub open/close", () => {
   let cwd;
 
   before(() => {
-    cwd = mkdtempSync(join(tmpdir(), "pi-gui-hub-"));
+    cwd = makeTestCwd("pi-gui-hub-");
     hub = new SessionHub();
   });
 
   after(async () => {
-    await hub.disposeAll();
-    rmSync(cwd, { recursive: true, force: true });
+    try {
+      await hub.disposeAll();
+    } catch {
+      /* ignore */
+    }
+    cleanupTestCwd(cwd);
   });
 
   it("open same path twice → same hub id", async () => {
@@ -237,6 +239,7 @@ describe("SessionHub open/close", () => {
 
   it("sse ring assigns seq and eventsAfter filters", async () => {
     const a = await hub.open({ cwd, fresh: true });
+    const baselineSeq = hub.ringInfo(a.id).seq;
     /** @type {number[]} */
     const seqs = [];
     const unsub = hub.subscribe(a.id, (_ev, seq) => seqs.push(seq));
@@ -248,11 +251,11 @@ describe("SessionHub open/close", () => {
     await assert.rejects(() => hub.prompt(a.id, "x"), /ring-test/);
     unsub();
     assert.ok(seqs.length >= 2);
-    assert.equal(seqs[0], 1);
-    assert.equal(seqs[1], 2);
-    const after1 = hub.eventsAfter(a.id, 1);
+    assert.equal(seqs[0], baselineSeq + 1);
+    assert.equal(seqs[1], baselineSeq + 2);
+    const after1 = hub.eventsAfter(a.id, seqs[0]);
     assert.equal(after1.length, seqs.length - 1);
-    assert.equal(after1[0].seq, 2);
+    assert.equal(after1[0].seq, seqs[1]);
     assert.equal(hub.eventsAfter(a.id, 999).length, 0);
     const info = hub.ringInfo(a.id);
     assert.equal(info.seq, seqs[seqs.length - 1]);
@@ -338,6 +341,7 @@ describe("SessionHub open/close", () => {
   it("native session.subscribe events reach hub listeners with seq", async () => {
     // Migration contract: hub fans out whatever the bound AgentSession emits.
     const a = await hub.open({ cwd, fresh: true });
+    const baselineSeq = hub.ringInfo(a.id).seq;
     /** @type {{ type?: string }[]} */
     const events = [];
     /** @type {number[]} */
@@ -358,7 +362,7 @@ describe("SessionHub open/close", () => {
       events.map((e) => e.type),
       ["message_start", "agent_settled"],
     );
-    assert.deepEqual(seqs, [1, 2]);
+    assert.deepEqual(seqs, [baselineSeq + 1, baselineSeq + 2]);
     await hub.close(a.id);
   });
 });
@@ -370,13 +374,17 @@ describe("SessionHub attach (bound / live)", () => {
   let cwd;
 
   before(() => {
-    cwd = mkdtempSync(join(tmpdir(), "pi-gui-attach-"));
+    cwd = makeTestCwd("pi-gui-attach-");
     hub = new SessionHub();
   });
 
   after(async () => {
-    await hub.disposeAll();
-    rmSync(cwd, { recursive: true, force: true });
+    try {
+      await hub.disposeAll();
+    } catch {
+      /* ignore */
+    }
+    cleanupTestCwd(cwd);
   });
 
   it("attach then close detaches without dispose", async () => {
@@ -461,7 +469,7 @@ describe("createServer stayAlive + session-index", () => {
     const { createAgentSession, SessionManager } = await import(
       "@earendil-works/pi-coding-agent"
     );
-    const cwd = mkdtempSync(join(tmpdir(), "pi-gui-idx-"));
+    const cwd = makeTestCwd("pi-gui-idx-");
     try {
       const { session } = await createAgentSession({
         cwd,
@@ -474,7 +482,7 @@ describe("createServer stayAlive + session-index", () => {
       session.dispose();
       assert.equal(getSessionById(session.sessionId), null);
     } finally {
-      rmSync(cwd, { recursive: true, force: true });
+      cleanupTestCwd(cwd);
     }
   });
 

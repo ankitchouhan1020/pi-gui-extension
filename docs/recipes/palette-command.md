@@ -22,3 +22,7 @@
 
 - ⌘K finds the command; action works on a live session
 - No new dependencies
+
+## Related
+
+- **pi --session** / **Resume session** — match pi `/resume` and `pi --session <path|id>`. Pair with **Copy pi --session**.

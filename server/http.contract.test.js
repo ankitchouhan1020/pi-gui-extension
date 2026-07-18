@@ -6,11 +6,9 @@
  */
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createServer } from "./http.js";
 import { hub } from "./hub.js";
+import { makeTestCwd, cleanupTestCwd } from "./test-temp.js";
 
 /** @param {string} base @param {string} path @param {RequestInit} [init] */
 async function api(base, path, init) {
@@ -93,7 +91,7 @@ describe("HTTP wire contract", () => {
   let sessionId;
 
   before(async () => {
-    cwd = mkdtempSync(join(tmpdir(), "pi-gui-http-"));
+    cwd = makeTestCwd("pi-gui-http-");
     app = createServer({ port: 0 });
     await new Promise((resolve) => app.listen(resolve));
     const addr = app.server.address();
@@ -122,7 +120,7 @@ describe("HTTP wire contract", () => {
     } catch {
       /* ignore */
     }
-    rmSync(cwd, { recursive: true, force: true });
+    cleanupTestCwd(cwd);
   });
 
   it("GET /api/health", async () => {
@@ -159,6 +157,43 @@ describe("HTTP wire contract", () => {
     assert.ok(Array.isArray(body.messages));
   });
 
+  it("creates, reads, edits, and reloads a project skill", async () => {
+    const content = `---\nname: gui-test-skill\ndescription: Exercise the GUI skill workspace.\n---\n\n# GUI test skill\n`;
+    const created = await api(base, `/api/sessions/${sessionId}/skills`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        scope: "project",
+        name: "gui-test-skill",
+        content,
+      }),
+    });
+    assert.equal(created.res.status, 200);
+    assert.equal(created.body.name, "gui-test-skill");
+    assert.ok(created.body.workspace.skills.some((s) => s.name === "gui-test-skill"));
+
+    const listed = await api(base, `/api/sessions/${sessionId}/skills`);
+    const skill = listed.body.skills.find((s) => s.name === "gui-test-skill");
+    assert.equal(skill.editable, true);
+    assert.equal(skill.editableScope, "project");
+
+    const detail = await api(
+      base,
+      `/api/sessions/${sessionId}/skill-file?path=${encodeURIComponent(skill.filePath)}`,
+    );
+    assert.equal(detail.res.status, 200);
+    assert.equal(detail.body.content, content);
+
+    const updated = content.replace("GUI test skill", "Updated GUI test skill");
+    const saved = await api(base, `/api/sessions/${sessionId}/skill-file`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filePath: skill.filePath, content: updated }),
+    });
+    assert.equal(saved.res.status, 200);
+    assert.ok(saved.body.workspace.skills.some((s) => s.name === "gui-test-skill"));
+  });
+
   it("POST /api/sessions/:id/prompt validates body", async () => {
     const empty = await api(base, `/api/sessions/${sessionId}/prompt`, {
       method: "POST",
@@ -173,6 +208,63 @@ describe("HTTP wire contract", () => {
       body: JSON.stringify({}),
     });
     assert.equal(missing.res.status, 400);
+  });
+
+  it("GET /api/sessions/:id/commands exposes extension argument choices", async () => {
+    const open = hub.require(sessionId);
+    const runner = open.session.extensionRunner;
+    const originalCommands = runner.getRegisteredCommands;
+    runner.getRegisteredCommands = () => [
+      {
+        invocationName: "headroom",
+        description: "Headroom status",
+        getArgumentCompletions: () => [
+          { value: "on", label: "on" },
+          { value: "off", label: "off" },
+          { value: "status", label: "status" },
+        ],
+      },
+    ];
+    try {
+      const listed = await api(base, `/api/sessions/${sessionId}/commands`);
+      assert.equal(listed.res.status, 200);
+      assert.equal(listed.body.commands[0].argumentHint, "<on|off|status>");
+    } finally {
+      runner.getRegisteredCommands = originalCommands;
+    }
+  });
+
+  it("POST /api/sessions/:id/command executes only registered extension commands", async () => {
+    const open = hub.require(sessionId);
+    const runner = open.session.extensionRunner;
+    const originalCommands = runner.getRegisteredCommands;
+    const originalPrompt = open.session.prompt;
+    let invoked = "";
+    runner.getRegisteredCommands = () => [{ invocationName: "headroom" }];
+    open.session.prompt = async (text) => {
+      invoked = text;
+    };
+    try {
+      const ran = await api(base, `/api/sessions/${sessionId}/command`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: "/headroom status" }),
+      });
+      assert.equal(ran.res.status, 200);
+      assert.equal(ran.body.ok, true);
+      assert.equal(invoked, "/headroom status");
+
+      const unknown = await api(base, `/api/sessions/${sessionId}/command`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: "/not-registered" }),
+      });
+      assert.equal(unknown.res.status, 400);
+      assert.match(unknown.body.error, /Unknown extension command/);
+    } finally {
+      runner.getRegisteredCommands = originalCommands;
+      open.session.prompt = originalPrompt;
+    }
   });
 
   it("POST /api/sessions/:id/prompt returns 202 and SSE error+settled on fail", async () => {

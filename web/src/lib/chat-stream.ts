@@ -34,7 +34,7 @@ export type StreamEffect =
   | { type: "resumed"; info: ConnectedInfo }
   | { type: "messages" }
   | { type: "turn"; phase: TurnPhase }
-  | { type: "settled" }
+  | { type: "settled"; reload?: boolean }
   | { type: "error"; error: string }
   | { type: "bash_running"; running: boolean }
   | { type: "queues"; steer: string[]; followUp: string[] }
@@ -90,6 +90,9 @@ export function messageIdentity(msg: ChatMessage): string | null {
   if (msg.role === "bashExecution" && typeof msg.command === "string") {
     return `bash:${msg.command}`;
   }
+  if (msg.role === "command" && typeof msg._commandId === "string") {
+    return `command:${msg._commandId}`;
+  }
   return null;
 }
 
@@ -109,6 +112,34 @@ export function peekText(msg: ChatMessage): string {
     .join("");
 }
 
+function timestampMs(value: ChatMessage["timestamp"]): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string" || !value) return null;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return numeric;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function skillNameFromMessage(msg: ChatMessage): string | null {
+  if (typeof msg._skillName === "string" && msg._skillName) return msg._skillName;
+  const text = peekText(msg).trim();
+  const command = text.match(/^\/skill:([^\s]+)/);
+  if (command) return command[1];
+  const expanded = text.match(/^<skill name="([^"]+)"\s/);
+  return expanded?.[1] ?? null;
+}
+
+/** A selected skill may be expanded or emitted by an alias before pi stores it. */
+function isRecentSkillTransform(local: ChatMessage, server: ChatMessage): boolean {
+  if (local.role !== "user" || server.role !== "user") return false;
+  const localSkill = skillNameFromMessage(local);
+  if (!localSkill || skillNameFromMessage(server) !== localSkill) return false;
+  const localAt = timestampMs(local.timestamp);
+  const serverAt = timestampMs(server.timestamp);
+  return localAt != null && serverAt != null && Math.abs(serverAt - localAt) <= 30_000;
+}
+
 export function shouldReplayRing(afterSeq: number, ringStart: number): boolean {
   if (!(afterSeq > 0)) return false;
   if (!(ringStart > 0)) return false;
@@ -119,8 +150,9 @@ export function shouldReplayRing(afterSeq: number, ringStart: number): boolean {
 /**
  * REST snapshot when:
  * - cold cursor (lastSeq=0)
- * - ring cannot fill the hole (gap)
  * - UI has no messages (hard refresh) — ring alone cannot rebuild history
+ * - client cursor past server high-water (hub/session reopened, seq reset)
+ * - ring cannot fill the hole (gap)
  */
 export function needSnapshot(
   lastSeq: number,
@@ -129,13 +161,22 @@ export function needSnapshot(
 ): boolean {
   if (!hasLocalMessages) return true;
   if (lastSeq <= 0) return true;
+  // Host restart / re-ensure: server seq rewound; old lastSeq would drop live frames
+  if (lastSeq > info.seq) return true;
   if (info.ringStart > lastSeq + 1) return true;
   return false;
 }
 
 function mergeMsg(prev: ChatMessage, next: ChatMessage): ChatMessage {
-  if (prev._key && !next._key) return { ...next, _key: prev._key };
-  return next._key ? next : { ...next, _key: prev._key };
+  const skillName = typeof prev._skillName === "string" ? prev._skillName : undefined;
+  const merged = prev._key && !next._key
+    ? { ...next, _key: prev._key }
+    : next._key
+      ? next
+      : { ...next, _key: prev._key };
+  return skillName && typeof merged._skillName !== "string"
+    ? { ...merged, _skillName: skillName }
+    : merged;
 }
 
 function replaceAt(
@@ -197,6 +238,7 @@ export class ChatStream {
   /** In-flight assistant row without stable id yet */
   private liveAssistantIdx = -1;
   private liveBashCmd: string | null = null;
+  private commandSseActive = false;
 
   get isSnapshotting(): boolean {
     return this.mode === "snapshotting";
@@ -217,6 +259,7 @@ export class ChatStream {
     this.buffer = [];
     this.liveAssistantIdx = -1;
     this.liveBashCmd = null;
+    this.commandSseActive = false;
   }
 
   reset() {
@@ -231,6 +274,7 @@ export class ChatStream {
     this.buffer = [];
     this.liveAssistantIdx = -1;
     this.liveBashCmd = null;
+    this.commandSseActive = false;
   }
 
   private persistSeq() {
@@ -247,7 +291,7 @@ export class ChatStream {
   }
 
   /** Optimistic user row before POST /prompt resolves. */
-  pushOptimisticUser(content: unknown): void {
+  pushOptimisticUser(content: unknown, options?: { skillName?: string }): void {
     this.messages = [
       ...this.messages,
       {
@@ -255,11 +299,105 @@ export class ChatStream {
         content,
         timestamp: Date.now(),
         _key: clientMessageKey(),
+        ...(options?.skillName ? { _skillName: options.skillName } : {}),
       },
     ];
     this.phase = "awaiting";
     this.sawServerStreaming = false;
     this.lastPromptAt = Date.now();
+  }
+
+  pushCommand(command: string, name: string): void {
+    this.messages = [
+      ...this.messages,
+      {
+        role: "command",
+        command,
+        _commandName: name,
+        _commandId: clientMessageKey(),
+        _commandStatus: "running",
+        _commandOutput: "",
+        timestamp: Date.now(),
+        _key: clientMessageKey(),
+      },
+    ];
+    this.phase = "awaiting";
+    this.lastPromptAt = Date.now();
+  }
+
+  private updateActiveCommand(patch: Partial<ChatMessage>): boolean {
+    const copy = this.messages.slice();
+    for (let i = copy.length - 1; i >= 0; i--) {
+      if (copy[i].role !== "command" || copy[i]._commandStatus !== "running") continue;
+      copy[i] = { ...copy[i], ...patch };
+      this.messages = copy;
+      return true;
+    }
+    return false;
+  }
+
+  finishCommand(ok: boolean, error = ""): boolean {
+    const patch: Partial<ChatMessage> = { _commandStatus: ok ? "done" : "error" };
+    if (!ok && error) {
+      patch._commandOutput = error;
+      patch._commandLevel = "error";
+    }
+    const changed = this.updateActiveCommand(patch);
+    this.clearTurn();
+    return changed;
+  }
+
+  /** HTTP completion fallback when command SSE frames race session wiring. */
+  completeCommand(
+    notifications: { message: string; level: string }[] = [],
+    ok = true,
+    error = "",
+  ): boolean {
+    const copy = this.messages.slice();
+    for (let i = copy.length - 1; i >= 0; i--) {
+      if (copy[i].role !== "command") continue;
+      const existing = typeof copy[i]._commandOutput === "string" ? copy[i]._commandOutput : "";
+      const output = notifications.map((item) => item.message).filter(Boolean).join("\n\n");
+      const level = notifications.some((item) => item.level === "error")
+        ? "error"
+        : notifications.some((item) => item.level === "warning")
+          ? "warning"
+          : "info";
+      copy[i] = {
+        ...copy[i],
+        _commandStatus: ok ? "done" : "error",
+        _commandOutput: existing || output || error,
+        _commandLevel: ok ? copy[i]._commandLevel ?? level : "error",
+      };
+      this.messages = copy;
+      this.clearTurn();
+      return true;
+    }
+    this.clearTurn();
+    return false;
+  }
+
+  private appendCommandOutput(message: string, level: string): boolean {
+    const copy = this.messages.slice();
+    for (let i = copy.length - 1; i >= 0; i--) {
+      if (copy[i].role !== "command" || copy[i]._commandStatus !== "running") continue;
+      const previous = typeof copy[i]._commandOutput === "string" ? copy[i]._commandOutput : "";
+      const previousLevel = copy[i]._commandLevel;
+      const nextLevel =
+        previousLevel === "error" || level === "error"
+          ? "error"
+          : previousLevel === "warning" || level === "warning"
+            ? "warning"
+            : "info";
+      copy[i] = {
+        ...copy[i],
+        _commandOutput: previous ? `${previous}\n\n${message}` : message,
+        _commandLevel: nextLevel,
+      };
+      this.messages = copy;
+      return true;
+    }
+    return false;
   }
 
   markAwaiting(): void {
@@ -321,7 +459,10 @@ export class ChatStream {
     serverSeq: number,
   ): StreamEffect[] {
     this.messages = preserveOptimistic(this.messages, serverMessages);
-    if (serverSeq > this.lastSeq) this.setSeq(serverSeq);
+    // Baseline cursor to server high-water (may reset after host/session reopen)
+    const seq = Number(serverSeq) || 0;
+    this.lastSeq = seq > 0 ? seq : 0;
+    this.persistSeq();
     this.mode = "live";
     this.liveAssistantIdx = -1;
     this.liveBashCmd = null;
@@ -532,6 +673,26 @@ export class ChatStream {
           return [{ type: "session_name", name: String(e.name ?? "") }];
         }
         return [];
+      case "command_start":
+        this.commandSseActive = true;
+        return [];
+      case "extension_notification": {
+        if (!this.commandSseActive) return [];
+        const message = typeof e.message === "string" ? e.message : "";
+        if (!message) return [];
+        const level = e.level === "error" || e.level === "warning" ? e.level : "info";
+        return this.appendCommandOutput(message, level)
+          ? [{ type: "messages" }]
+          : [];
+      }
+      case "command_end": {
+        this.commandSseActive = false;
+        const ok = e.ok !== false;
+        this.finishCommand(ok, typeof e.error === "string" ? e.error : "");
+        // Command cards are transient UI rows rather than persisted session
+        // messages, so an immediate REST refresh would erase the result.
+        return [{ type: "messages" }, { type: "settled", reload: false }];
+      }
       case "bash_start": {
         const command = typeof e.command === "string" ? e.command : "";
         if (command) {
@@ -715,12 +876,17 @@ export function preserveOptimistic(
     if (!loc._key) continue;
     const id = messageIdentity(loc);
     if (id) {
+      let matched = false;
       for (let i = 0; i < out.length; i++) {
-        if (messageIdentity(out[i]) === id && !out[i]._key) {
-          out[i] = { ...out[i], _key: loc._key };
+        if (messageIdentity(out[i]) === id) {
+          if (!out[i]._key) out[i] = { ...out[i], _key: loc._key };
+          matched = true;
           break;
         }
       }
+      // Extension command rows exist only in the live web transcript. Keep
+      // them when a cold/gap snapshot establishes its persisted baseline.
+      if (!matched && loc.role === "command") out.push({ ...loc });
       continue;
     }
     if (
@@ -733,6 +899,32 @@ export function preserveOptimistic(
       for (let i = out.length - 1; i >= 0; i--) {
         if (out[i].role === "user" && peekText(out[i]) === text) {
           if (!out[i]._key) out[i] = { ...out[i], _key: loc._key };
+          if (typeof loc._skillName === "string") {
+            out[i] = { ...out[i], _skillName: loc._skillName };
+          }
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) {
+        // pi expands canonical skills and extensions may emit them for aliases.
+        // Pair only verified same-skill rows, never arbitrary recent slash input.
+        for (let i = out.length - 1; i >= 0; i--) {
+          if (!isRecentSkillTransform(loc, out[i])) continue;
+          const represented = local.some((other) => {
+            if (other === loc || other.role !== "user") return false;
+            const otherId = messageIdentity(other);
+            const serverId = messageIdentity(out[i]);
+            return (
+              (otherId && serverId && otherId === serverId) ||
+              peekText(other) === peekText(out[i])
+            );
+          });
+          if (represented) continue;
+          if (!out[i]._key) out[i] = { ...out[i], _key: loc._key };
+          if (typeof loc._skillName === "string") {
+            out[i] = { ...out[i], _skillName: loc._skillName };
+          }
           matched = true;
           break;
         }

@@ -3,5 +3,6 @@ web/node_modules/
 # package-root dist/ is committed for zero-build git installs
 web/dist/
 .DS_Store
+pi-session-*.html
 *.log
 *.tgz

@@ -18,6 +18,8 @@ import { hub } from "../server/hub.js";
  * (import here via jiti aliases — not via server/session-index.js nested resolve).
  */
 const sessionsById = new Map<string, InstanceType<typeof AgentSession>>();
+/** Hub ids of live-attached TUI sessions (multi-bind; detach per session). */
+const boundIds = new Set<string>();
 (function ensureSessionIndex() {
   const proto = AgentSession.prototype as {
     subscribe: (listener: (ev: unknown) => void) => () => void;
@@ -38,7 +40,14 @@ const sessionsById = new Map<string, InstanceType<typeof AgentSession>>();
   const origDispose = proto.dispose;
   proto.dispose = function disposeIndexed(this: { sessionId?: string }) {
     try {
-      if (this.sessionId) sessionsById.delete(this.sessionId);
+      if (this.sessionId) {
+        sessionsById.delete(this.sessionId);
+        // Drop live hub bind if this was a TUI-attached session
+        if (boundIds.has(this.sessionId)) {
+          hub.detach(this.sessionId);
+          boundIds.delete(this.sessionId);
+        }
+      }
     } catch {
       /* ignore */
     }
@@ -52,21 +61,43 @@ function getSessionById(id: string) {
 
 /** @type {ReturnType<typeof createServer> | null} */
 let app: ReturnType<typeof createServer> | null = null;
-/** Hub id of the attached TUI session, if any. */
-let boundId: string | null = null;
 
 const DEFAULT_PORT = Number(process.env.PI_GUI_PORT || 3847);
 
-/** Exported for unit tests. */
-export function parseArgs(raw?: string): { cmd: "start" | "stop"; port: number } {
+/**
+ * Parse `/gui` args.
+ * - `/gui` · `/gui 4000` — live-attach current session
+ * - `/gui <sessionId|path>` · `/gui open <id>` — open that session in the UI
+ * - `/gui stop`
+ */
+export function parseArgs(raw?: string): {
+  cmd: "start" | "stop";
+  port: number;
+  /** Session id or disk path to open (omit = current TUI session). */
+  sessionRef?: string;
+} {
   const parts = (raw ?? "").trim().split(/\s+/).filter(Boolean);
   let cmd: "start" | "stop" = "start";
   let port = DEFAULT_PORT;
+  let sessionRef: string | undefined;
   for (const p of parts) {
-    if (p === "stop" || p === "start") cmd = p;
-    else if (/^\d+$/.test(p)) port = Number(p) || DEFAULT_PORT;
+    if (p === "stop") {
+      cmd = "stop";
+      continue;
+    }
+    // verbs / aliases — not session refs
+    if (p === "start" || p === "takeover" || p === "open") continue;
+    // port: 1–65535 only (session ids are UUIDs / paths, not bare small ints)
+    if (/^\d{1,5}$/.test(p)) {
+      const n = Number(p);
+      if (n >= 1 && n <= 65535) {
+        port = n;
+        continue;
+      }
+    }
+    sessionRef = p;
   }
-  return { cmd, port };
+  return { cmd, port, sessionRef };
 }
 
 async function isUp(port: number): Promise<boolean> {
@@ -80,24 +111,76 @@ async function isUp(port: number): Promise<boolean> {
 
 function attachLive(ctx: ExtensionContext): { id: string } | null {
   const id = ctx.sessionManager.getSessionId();
+  return attachSessionById(id, ctx.cwd);
+}
+
+/**
+ * Live-attach an in-process AgentSession (TUI) by id.
+ * @param {string} id
+ * @param {string} [cwd]
+ */
+function attachSessionById(id: string, cwd?: string): { id: string } | null {
   const session = getSessionById(id);
   if (!session) return null;
-  const meta = hub.attach(session, { cwd: ctx.cwd });
-  boundId = meta.id;
+  const meta = hub.attach(session, { cwd: cwd || process.cwd() });
+  boundIds.add(meta.id);
   return meta;
 }
 
-function detachLive(): void {
-  if (boundId) {
-    hub.detach(boundId);
-    boundId = null;
+/**
+ * Resolve session ref → hub id: live attach if possible, else open from disk.
+ * @returns hub session id
+ */
+async function resolveSessionInHub(
+  sessionRef: string | undefined,
+  ctx: ExtensionContext,
+): Promise<{ id: string; live: boolean }> {
+  const currentId = ctx.sessionManager.getSessionId();
+  const ref = (sessionRef || currentId || "").trim();
+  if (!ref) {
+    throw new Error("no session id (pass /gui <sessionId> or use in a live session)");
   }
+
+  // Current TUI session → live attach
+  if (!sessionRef || ref === currentId) {
+    const meta = attachLive(ctx);
+    if (meta) return { id: meta.id, live: true };
+    // Fall through: maybe only on disk
+  }
+
+  // Another live AgentSession in this process (indexed via subscribe)
+  const live = attachSessionById(ref, ctx.cwd);
+  if (live) return { id: live.id, live: true };
+
+  // Disk / already-open hub session
+  const opened = await hub.ensure(ref);
+  return { id: opened.id, live: Boolean(opened.bound) };
+}
+
+/** Detach one session, or all if id omitted. */
+function detachLive(id?: string | null): void {
+  if (id) {
+    hub.detach(id);
+    boundIds.delete(id);
+    return;
+  }
+  for (const bid of [...boundIds]) {
+    hub.detach(bid);
+  }
+  boundIds.clear();
+}
+
+async function waitUntilDown(port: number, ms = 5000): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < ms) {
+    if (!(await isUp(port))) return true;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return !(await isUp(port));
 }
 
 async function startServer(port: number): Promise<void> {
   if (app) return;
-
-  // Another process already serving this port — don't take over.
   if (await isUp(port)) return;
 
   const next = createServer({ port, stayAlive: true });
@@ -115,6 +198,34 @@ async function startServer(port: number): Promise<void> {
   app = next;
 }
 
+/**
+ * Ensure this TUI process owns the HTTP host so hub.attach is live.
+ * If another process holds the port, shut it down first (automatic takeover).
+ */
+async function ensureServer(
+  port: number,
+  notify: (msg: string) => void,
+): Promise<void> {
+  if (app) return;
+
+  if (await isUp(port)) {
+    notify(`Taking over pi-gui on :${port} for live session…`);
+    await stopServer(port);
+    if (!(await waitUntilDown(port))) {
+      throw new Error(
+        `port ${port} still busy after shutdown — free it or run /gui stop there`,
+      );
+    }
+  } else {
+    notify("Starting pi-gui…");
+  }
+
+  await startServer(port);
+  if (!app) {
+    throw new Error(`failed to bind pi-gui on :${port}`);
+  }
+}
+
 async function stopServer(port: number): Promise<"stopped" | "not_running"> {
   if (app) {
     detachLive();
@@ -130,19 +241,14 @@ async function stopServer(port: number): Promise<"stopped" | "not_running"> {
 
   if (!(await isUp(port))) return "not_running";
 
-  // Foreign/standalone server — ask it to exit
+  // Foreign/standalone server — ask it to exit (or close if stayAlive)
   try {
     await fetch(`http://127.0.0.1:${port}/api/shutdown`, { method: "POST" });
   } catch {
     /* process exits mid-response — expected */
   }
 
-  const start = Date.now();
-  while (Date.now() - start < 3000) {
-    if (!(await isUp(port))) return "stopped";
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  return (await isUp(port)) ? "not_running" : "stopped";
+  return (await waitUntilDown(port, 3000)) ? "stopped" : "not_running";
 }
 
 function openBrowser(url: string): void {
@@ -160,9 +266,10 @@ function openBrowser(url: string): void {
 
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("gui", {
-    description: "Open pi-gui web UI (same process + live session). /gui stop to shut down.",
+    description:
+      "Open pi-gui. /gui · /gui <sessionId> · /gui open <id> · /gui stop. Takes over port if needed.",
     handler: async (args, ctx) => {
-      const { cmd, port } = parseArgs(args);
+      const { cmd, port, sessionRef } = parseArgs(args);
       const base = `http://127.0.0.1:${port}`;
 
       try {
@@ -176,21 +283,14 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
-        if (!app) {
-          if (await isUp(port)) {
-            // Foreign server already up — open browser, no live attach.
-            ctx.ui.notify(`pi-gui already running: ${base}`, "info");
-            openBrowser(base);
-            return;
-          }
-          ctx.ui.notify("Starting pi-gui…", "info");
-          await startServer(port);
-        }
+        // Own host (take over foreign process if needed).
+        await ensureServer(port, (msg) => ctx.ui.notify(msg, "info"));
 
-        const meta = attachLive(ctx);
-        const url = meta ? `${base}/sessions/${encodeURIComponent(meta.id)}` : base;
+        // Current session, or explicit /gui <sessionId> / /gui open <id>
+        const { id, live } = await resolveSessionInHub(sessionRef, ctx);
+        const url = `${base}/sessions/${encodeURIComponent(id)}`;
         ctx.ui.notify(
-          meta ? `pi-gui: ${url} (live session)` : `pi-gui: ${url}`,
+          live ? `pi-gui: ${url} (live)` : `pi-gui: ${url}`,
           "info",
         );
         openBrowser(url);
@@ -201,19 +301,22 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // Rebind when TUI replaces the session (/new, /resume, fork).
+  // Attach each new TUI session without dropping others (multi-live).
   // Hub-owned sessions also load this extension with mode "rpc" — ignore those.
   pi.on("session_start", (_event, ctx) => {
     if (!app || ctx.mode !== "tui") return;
-    detachLive();
     attachLive(ctx);
   });
 
-  // Only tear down HTTP on full TUI quit — not on session replace/reload.
+  // Per-session detach on replace; tear down HTTP only on full TUI quit.
   pi.on("session_shutdown", async (event, ctx) => {
     if (ctx.mode !== "tui") return;
     if (event.reason !== "quit") {
-      detachLive();
+      try {
+        detachLive(ctx.sessionManager.getSessionId());
+      } catch {
+        detachLive();
+      }
       return;
     }
     if (app) {

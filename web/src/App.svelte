@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { SessionRow } from "$lib/api";
+  import type { ForkCandidate, SessionRow, TreeNode } from "$lib/api";
   import {
     listSessions,
     openSession,
@@ -9,14 +9,24 @@
     getMessages,
     getSession,
     getHealth,
+    getTree,
+    navigateTree,
+    forkSession,
+    setPendingEditorText,
     setModel,
     setThinking,
     abort,
+    shutdown,
+    shareSession,
   } from "$lib/api";
+  import { builtinByName } from "$lib/slash-builtins";
   import ChatPanel from "$lib/components/ChatPanel.svelte";
   import SessionList from "$lib/components/SessionList.svelte";
   import GitDiffSidebar from "$lib/components/GitDiffSidebar.svelte";
   import CommandPalette from "$lib/components/CommandPalette.svelte";
+  import ForkConfirmDialog from "$lib/components/ForkConfirmDialog.svelte";
+  import TreeNavigateDialog from "$lib/components/TreeNavigateDialog.svelte";
+  import SkillWorkspaceDialog from "$lib/components/SkillWorkspaceDialog.svelte";
   const SIDEBAR_KEY = "pi-gui-sidebar-open";
   const GIT_SIDEBAR_KEY = "pi-gui-git-sidebar-open";
 
@@ -63,7 +73,27 @@
   }
   /** Non-fatal open note (e.g. model restore fallback) — dismissible */
   let warn = $state<string | null>(null);
+  let shareNotice = $state<{ viewer: string; gist: string } | null>(null);
   let cmdkOpen = $state(false);
+  let skillWorkspaceOpen = $state(false);
+  let forkRequest = $state<{
+    sourceId: string;
+    candidate: ForkCandidate;
+  } | null>(null);
+  let forkBusy = $state(false);
+  let forkError = $state("");
+  let treeRequest = $state<{ sourceId: string; node: TreeNode } | null>(null);
+  let treeBusy = $state(false);
+  let treeError = $state("");
+  let treeReturnId = $state<string | null>(null);
+  let treeNavigation = $state<{
+    token: number;
+    sessionId: string;
+    editorText?: string;
+  } | null>(null);
+  let treeNavigationToken = 0;
+  /** One-shot palette target from composer `/` builtins. */
+  let cmdkBoot = $state<string | null>(null);
   /** Server process.cwd() — fallback folder for new sessions */
   let defaultCwd = $state("");
   /** Prevent double-click open storms */
@@ -428,6 +458,163 @@
     }
   }
 
+  function openPalette(boot?: string | null) {
+    cmdkBoot = boot ?? null;
+    cmdkOpen = true;
+  }
+
+  function requestFork(candidate: ForkCandidate) {
+    if (!selected?.id || !candidate.entryId) return;
+    forkError = "";
+    forkRequest = { sourceId: selected.id, candidate };
+  }
+
+  async function confirmFork() {
+    const request = forkRequest;
+    if (!request || forkBusy) return;
+    forkBusy = true;
+    forkError = "";
+    try {
+      const row = await forkSession(request.sourceId, request.candidate.entryId, {
+        position: "before",
+      });
+      setPendingEditorText(row.selectedText ?? request.candidate.text);
+      forkRequest = null;
+      await onSelect({ ...row, running: true });
+    } catch (e) {
+      forkError = e instanceof Error ? e.message : String(e);
+    } finally {
+      forkBusy = false;
+    }
+  }
+
+  function requestTreeNavigation(node: TreeNode) {
+    if (!selected?.id || !node.id) return;
+    treeError = "";
+    treeRequest = { sourceId: selected.id, node };
+  }
+
+  async function confirmTreeNavigation(opts: {
+    summarize: boolean;
+    customInstructions?: string;
+  }) {
+    const request = treeRequest;
+    if (!request || treeBusy) return;
+    treeBusy = true;
+    treeError = "";
+    try {
+      const result = await navigateTree(request.sourceId, request.node.id, opts);
+      if (result.aborted) {
+        treeError = "Branch summarization was cancelled";
+        return;
+      }
+      if (result.cancelled) {
+        treeError = "Navigation was cancelled";
+        return;
+      }
+      treeNavigation = {
+        token: ++treeNavigationToken,
+        sessionId: request.sourceId,
+        editorText: result.editorText,
+      };
+      treeRequest = null;
+      treeReturnId = null;
+    } catch (e) {
+      treeError = e instanceof Error ? e.message : String(e);
+    } finally {
+      treeBusy = false;
+    }
+  }
+
+  function cancelTreeNavigation() {
+    if (!treeRequest || treeBusy) return;
+    treeReturnId = treeRequest.node.id;
+    treeRequest = null;
+    treeError = "";
+    openPalette("tree");
+  }
+
+  /** pi `/clone` — branch at current leaf. */
+  async function onClone() {
+    if (!selected?.id) return;
+    try {
+      const { leafId } = await getTree(selected.id);
+      if (!leafId) {
+        warn = "Nothing to clone yet — send a message first";
+        return;
+      }
+      const row = await forkSession(selected.id, leafId, { position: "at" });
+      const next = { ...row, running: true };
+      selected = next;
+      upsertSession(next);
+      setSessionUrl(next.id);
+      await refresh();
+      if (selected) upsertSession({ ...selected, running: true });
+    } catch (e) {
+      err = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  function onBuiltinSlash(name: string) {
+    const b = builtinByName(name);
+    if (!b) return;
+    const go = b.go;
+    if (go === "na") {
+      warn = `/${name} is not available in the GUI yet`;
+      return;
+    }
+    if (go === "action:new") {
+      onNew();
+      return;
+    }
+    if (go === "action:compact") {
+      void onCompact();
+      return;
+    }
+    if (go === "action:copy") {
+      void onCopyLast();
+      return;
+    }
+    if (go === "action:quit") {
+      void shutdown().catch(() => {});
+      return;
+    }
+    if (go === "action:clone") {
+      void onClone();
+      return;
+    }
+    if (go === "action:share") {
+      void onShare();
+      return;
+    }
+    if (go === "palette") {
+      openPalette(null);
+      return;
+    }
+    if (go.startsWith("palette:")) {
+      openPalette(go.slice("palette:".length));
+      return;
+    }
+  }
+
+  async function onShare() {
+    if (!selected?.id) {
+      err = "Open a session to share";
+      return;
+    }
+    try {
+      const res = await shareSession(selected.id);
+      shareNotice = { viewer: res.url, gist: res.gistUrl };
+      try {
+        await navigator.clipboard.writeText(res.url);
+      } catch {
+        /* ignore */
+      }
+    } catch (e) {
+      err = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   $effect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -491,9 +678,9 @@
     {/if}
     {#if warn}
       <div
-        class="flex items-center justify-between gap-3 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-900 dark:text-amber-100"
+        class="flex items-start justify-between gap-3 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-900 dark:text-amber-100"
       >
-        <span class="min-w-0">{warn}</span>
+        <span class="min-w-0 whitespace-pre-line">{warn}</span>
         <button
           type="button"
           class="shrink-0 text-xs underline opacity-80 hover:opacity-100"
@@ -503,12 +690,32 @@
         </button>
       </div>
     {/if}
+    {#if shareNotice}
+      <div class="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-900 dark:text-amber-100">
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0 space-y-1">
+            <div>Share URL: <a class="underline" href={shareNotice.viewer} target="_blank" rel="noreferrer">{shareNotice.viewer}</a></div>
+            <div>Gist: <a class="underline" href={shareNotice.gist} target="_blank" rel="noreferrer">{shareNotice.gist}</a></div>
+          </div>
+          <button
+            type="button"
+            class="shrink-0 text-xs underline opacity-80 hover:opacity-100"
+            onclick={() => (shareNotice = null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
+    {/if}
     <ChatPanel
       session={selected}
       {defaultCwd}
       {forceCwd}
       {onSessionUpdate}
       onEnsureSession={ensureSession}
+      onBuiltinSlash={onBuiltinSlash}
+      onRequestFork={requestFork}
+      {treeNavigation}
       showExpandSidebar={!sidebarOpen}
       showExpandGit={!gitSidebarOpen}
       onExpandSidebar={() => setSidebarOpen(true)}
@@ -526,9 +733,14 @@
 
 <CommandPalette
   open={cmdkOpen}
-  onClose={() => (cmdkOpen = false)}
+  onClose={() => {
+    cmdkOpen = false;
+    cmdkBoot = null;
+  }}
   session={selected}
   {sessions}
+  boot={cmdkBoot}
+  onBootConsumed={() => (cmdkBoot = null)}
   onNew={onNew}
   onResume={onSelect}
   onRename={onRename}
@@ -536,9 +748,47 @@
   onCompact={onCompact}
   onCloseSession={onCloseCurrent}
   onCopyLast={onCopyLast}
+  onShare={onShare}
+  onOpenSkillsWorkspace={() => (skillWorkspaceOpen = true)}
+  onRequestFork={requestFork}
+  onRequestTree={requestTreeNavigation}
+  initialTreeId={treeReturnId}
+  onInitialTreeConsumed={() => (treeReturnId = null)}
   {onCycleModel}
   {onSetModel}
   {onCycleThinking}
   {onSetThinking}
   {onAbort}
 />
+
+<SkillWorkspaceDialog
+  open={skillWorkspaceOpen}
+  sessionId={selected?.id}
+  cwd={selected?.cwd}
+  onClose={() => (skillWorkspaceOpen = false)}
+/>
+
+{#if forkRequest}
+  <ForkConfirmDialog
+    message={forkRequest.candidate.text}
+    busy={forkBusy}
+    error={forkError}
+    onCancel={() => {
+      if (!forkBusy) {
+        forkRequest = null;
+        forkError = "";
+      }
+    }}
+    onConfirm={confirmFork}
+  />
+{/if}
+
+{#if treeRequest}
+  <TreeNavigateDialog
+    node={treeRequest.node}
+    busy={treeBusy}
+    error={treeError}
+    onCancel={cancelTreeNavigation}
+    onNavigate={confirmTreeNavigation}
+  />
+{/if}

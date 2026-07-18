@@ -11,6 +11,8 @@ export type SessionRow = {
   messageCount?: number;
   firstMessage?: string;
   running: boolean;
+  /** Live TUI (or external) attach — hub does not own/dispose the AgentSession */
+  bound?: boolean;
   streaming?: boolean;
   thinkingLevel?: string;
   thinking?: string;
@@ -214,8 +216,24 @@ export function prompt(id: string, message: string, images?: PromptImage[]) {
   });
 }
 
+export function runCommand(id: string, command: string) {
+  return req<{
+    ok: boolean;
+    id: string;
+    notifications?: { message: string; level: string }[];
+  }>(
+    `/api/sessions/${encodeURIComponent(id)}/command`,
+    { method: "POST", body: JSON.stringify({ command }) },
+  );
+}
+
 /** Active ChatPanel send path — palette / external UI use this so optimistic UI + SSE stay in sync. */
-type ChatPromptHandler = (text: string) => Promise<void>;
+export type ChatPromptOptions = {
+  skillName?: string;
+  commandName?: string;
+  commandSource?: string;
+};
+type ChatPromptHandler = (text: string, options?: ChatPromptOptions) => Promise<void>;
 let chatPromptHandler: ChatPromptHandler | null = null;
 
 export function registerChatPrompt(handler: ChatPromptHandler | null) {
@@ -223,11 +241,11 @@ export function registerChatPrompt(handler: ChatPromptHandler | null) {
 }
 
 /** Send through the open chat (optimistic bubble + streaming). */
-export function chatPrompt(text: string) {
+export function chatPrompt(text: string, options?: ChatPromptOptions) {
   if (!chatPromptHandler) {
     return Promise.reject(new Error("No active chat"));
   }
-  return chatPromptHandler(text);
+  return chatPromptHandler(text, options);
 }
 
 export function abort(id: string) {
@@ -254,6 +272,66 @@ export function setModel(
   return req<SessionRow & { cycled?: unknown }>(
     `/api/sessions/${encodeURIComponent(id)}/model`,
     { method: "POST", body: JSON.stringify(body) },
+  );
+}
+
+/** pi `/scoped-models` — null enabled = all models in Ctrl+P cycle. */
+export type ScopedModelsInfo = {
+  models: ModelInfo[];
+  enabled: string[] | null;
+};
+
+export function getScopedModels(id: string) {
+  return req<ScopedModelsInfo>(
+    `/api/sessions/${encodeURIComponent(id)}/scoped-models`,
+  );
+}
+
+export function setScopedModels(id: string, enabled: string[] | null) {
+  return req<ScopedModelsInfo>(
+    `/api/sessions/${encodeURIComponent(id)}/scoped-models`,
+    { method: "POST", body: JSON.stringify({ enabled }) },
+  );
+}
+
+/** pi `/share` — secret gist + pi.dev viewer URL. */
+export type ShareResult = {
+  ok: boolean;
+  url: string;
+  gistUrl: string;
+  gistId: string;
+};
+
+export function shareSession(id: string) {
+  return req<ShareResult>(
+    `/api/sessions/${encodeURIComponent(id)}/share`,
+    { method: "POST", body: "{}" },
+  );
+}
+
+/** pi `/trust` options. */
+export type TrustUpdate = { path: string; decision: boolean | null };
+export type TrustOption = {
+  id: string;
+  label: string;
+  trusted: boolean;
+  updates: TrustUpdate[];
+};
+export type TrustInfo = {
+  cwd: string;
+  saved: { path: string; decision: boolean } | null;
+  options: TrustOption[];
+  note?: string;
+};
+
+export function getTrust(id: string) {
+  return req<TrustInfo>(`/api/sessions/${encodeURIComponent(id)}/trust`);
+}
+
+export function setTrust(id: string, updates: TrustUpdate[]) {
+  return req<{ ok: boolean; trusted: boolean | null; note?: string }>(
+    `/api/sessions/${encodeURIComponent(id)}/trust`,
+    { method: "POST", body: JSON.stringify({ updates }) },
   );
 }
 
@@ -434,13 +512,53 @@ export type SkillInfo = {
   disableModelInvocation?: boolean;
   source?: string;
   scope?: string;
+  origin?: "package" | "top-level" | string;
+  editable?: boolean;
+  editableScope?: "user" | "project" | null;
+};
+
+export type SkillWorkspace = {
+  skills: SkillInfo[];
+  roots: { user: string; project: string };
+  diagnostics?: { type?: string; message: string; path?: string }[];
 };
 
 /** Skills available on an open session (pi `/skill:name`). */
 export function listSkills(id: string) {
-  return req<{ skills: SkillInfo[] }>(
+  return req<SkillWorkspace>(
     `/api/sessions/${encodeURIComponent(id)}/skills`,
   );
+}
+
+export function getSkillFile(id: string, filePath: string) {
+  return req<{ filePath: string; content: string; editable: boolean }>(
+    `/api/sessions/${encodeURIComponent(id)}/skill-file?path=${encodeURIComponent(filePath)}`,
+  );
+}
+
+export function saveSkillFile(id: string, filePath: string, content: string) {
+  return req<{ filePath: string; workspace: SkillWorkspace }>(
+    `/api/sessions/${encodeURIComponent(id)}/skill-file`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ filePath, content }),
+    },
+  );
+}
+
+export function createSkill(
+  id: string,
+  input: { scope: "user" | "project"; name: string; content: string },
+) {
+  return req<{
+    filePath: string;
+    scope: "user" | "project";
+    name: string;
+    workspace: SkillWorkspace;
+  }>(`/api/sessions/${encodeURIComponent(id)}/skills`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export type ExtensionInfo = {

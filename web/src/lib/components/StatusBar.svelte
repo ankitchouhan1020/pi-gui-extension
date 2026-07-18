@@ -5,10 +5,13 @@
   import Badge from "agentic-ui-kit/components/ui/badge.svelte";
   import Button from "agentic-ui-kit/components/ui/button.svelte";
   import Input from "agentic-ui-kit/components/ui/input.svelte";
+  import Tooltip from "agentic-ui-kit/components/ui/tooltip.svelte";
+  import TooltipContent from "agentic-ui-kit/components/ui/tooltip-content.svelte";
+  import TooltipTrigger from "agentic-ui-kit/components/ui/tooltip-trigger.svelte";
+  import CircleDollarSign from "@lucide/svelte/icons/circle-dollar-sign";
+  import Gauge from "@lucide/svelte/icons/gauge";
   import PanelLeft from "@lucide/svelte/icons/panel-left";
   import PanelRight from "@lucide/svelte/icons/panel-right";
-  import ChevronsDownUp from "@lucide/svelte/icons/chevrons-down-up";
-  import ChevronsUpDown from "@lucide/svelte/icons/chevrons-up-down";
 
   type Props = {
     session: SessionRow;
@@ -18,9 +21,6 @@
     showExpandGit?: boolean;
     onExpandSidebar?: () => void;
     onExpandGit?: () => void;
-    /** Thinking + tool cards expanded (default true). */
-    foldOpen?: boolean;
-    onToggleFold?: () => void;
   };
 
   let {
@@ -31,8 +31,6 @@
     showExpandGit = false,
     onExpandSidebar,
     onExpandGit,
-    foldOpen = true,
-    onToggleFold,
   }: Props = $props();
 
   let renaming = $state(false);
@@ -60,12 +58,25 @@
   /** Surface compact CTA when context is getting tight. */
   const nearLimit = $derived(ctxPct != null && ctxPct >= 80);
 
-  /** Token / cost / ctx chips for header (e.g. `48.4k↑ · 237↓ · $0.0000 · 5% ctx`). */
-  const metaParts = $derived.by(() => {
-    const parts: string[] = [];
-    const tokens = session.stats?.tokens;
-    if (tokens?.input) parts.push(`${fmtN(tokens.input)}↑`);
-    if (tokens?.output) parts.push(`${fmtN(tokens.output)}↓`);
+  type MetaItem = {
+    kind: "context" | "cost";
+    value: string;
+    label: string;
+    warning?: boolean;
+  };
+
+  /** Keep the header focused on the two values that guide user decisions. */
+  const metaItems = $derived.by(() => {
+    const items: MetaItem[] = [];
+    if (ctxPct != null) {
+      const remaining = Math.max(0, Math.min(100, 100 - Math.round(ctxPct)));
+      items.push({
+        kind: "context",
+        value: `${remaining}% left`,
+        label: `${remaining}% of the context window remains before the conversation may need compacting.`,
+        warning: nearLimit,
+      });
+    }
     const raw = session.stats?.cost;
     const cost =
       typeof raw === "number"
@@ -74,10 +85,14 @@
           ? raw.total
           : null;
     if (cost != null && !Number.isNaN(cost)) {
-      parts.push(cost < 0.01 ? `$${cost.toFixed(4)}` : `$${cost.toFixed(3)}`);
+      const value = cost < 0.01 ? `$${cost.toFixed(4)}` : `$${cost.toFixed(3)}`;
+      items.push({
+        kind: "cost",
+        value,
+        label: `Estimated cost for this session so far: ${value}.`,
+      });
     }
-    if (ctxPct != null) parts.push(`${Math.round(ctxPct)}% ctx`);
-    return parts;
+    return items;
   });
 
   async function doCompact() {
@@ -92,13 +107,6 @@
     } finally {
       compactingLocal = false;
     }
-  }
-
-  function fmtN(n: number) {
-    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-    if (n >= 10_000) return `${Math.round(n / 1_000)}k`;
-    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-    return String(n);
   }
 
   // Clear rename override when switching sessions (id change only — no detail loop)
@@ -146,15 +154,16 @@
   class="flex h-11 shrink-0 items-center gap-2 border-b border-black/[0.06] bg-[var(--pi-canvas)] px-2 dark:border-white/10 sm:gap-3 sm:px-3"
 >
   {#if showExpandSidebar && onExpandSidebar}
-    <button
-      type="button"
-      class="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+    <Button
+      variant="ghost"
+      size="icon"
+      class="size-8 shrink-0 text-muted-foreground"
       title="Expand sidebar"
       aria-label="Expand sidebar"
       onclick={onExpandSidebar}
     >
       <PanelLeft class="size-4" />
-    </button>
+    </Button>
   {/if}
 
   <div class="min-w-0 flex-1">
@@ -183,15 +192,36 @@
   </div>
 
   <div class="flex shrink-0 items-center gap-2">
-    {#if metaParts.length}
-      <span
-        class="font-mono text-[11px] tabular-nums tracking-tight {nearLimit
-          ? 'text-amber-600 dark:text-amber-400'
-          : 'text-muted-foreground'}"
-        title={metaParts.join(" · ")}
-      >
-        {metaParts.join(" · ")}
-      </span>
+    {#if metaItems.length}
+      <div class="flex items-center gap-1" aria-label="Session usage">
+        {#each metaItems as item (item.kind)}
+          <Tooltip>
+            <TooltipTrigger>
+              {#snippet child({ props })}
+                <span {...props} class="inline-flex">
+                  <Badge
+                    variant="outline"
+                    class="h-6 gap-1 border-border/70 bg-background/60 px-1.5 font-mono text-[10px] font-medium tabular-nums text-muted-foreground shadow-none {item.warning
+                      ? 'border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-400'
+                      : ''}"
+                    aria-label={item.label}
+                  >
+                    {#if item.kind === "cost"}
+                      <CircleDollarSign class="size-3" />
+                    {:else}
+                      <Gauge class="size-3" />
+                    {/if}
+                    <span>{item.value}</span>
+                  </Badge>
+                </span>
+              {/snippet}
+            </TooltipTrigger>
+            <TooltipContent side="bottom" class="max-w-64 text-center">
+              {item.label}
+            </TooltipContent>
+          </Tooltip>
+        {/each}
+      </div>
     {/if}
     {#if nearLimit && !isCompacting}
       <Button
@@ -201,7 +231,7 @@
         class="h-6 px-2 text-[10px] {ctxPct != null && ctxPct >= 95
           ? 'border-amber-500/60 text-amber-700 dark:text-amber-400'
           : ''}"
-        title="Compact context"
+        title="Compact"
         onclick={doCompact}
       >
         Compact
@@ -210,31 +240,17 @@
     {#if isCompacting}
       <Badge variant="secondary" class="h-6 text-[10px]">compacting</Badge>
     {/if}
-    {#if onToggleFold}
-      <button
-        type="button"
-        class="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        title={foldOpen ? "Collapse all thinking & tools" : "Expand all thinking & tools"}
-        aria-label={foldOpen ? "Collapse all thinking and tools" : "Expand all thinking and tools"}
-        onclick={onToggleFold}
-      >
-        {#if foldOpen}
-          <ChevronsDownUp class="size-4" />
-        {:else}
-          <ChevronsUpDown class="size-4" />
-        {/if}
-      </button>
-    {/if}
     {#if showExpandGit && onExpandGit}
-      <button
-        type="button"
-        class="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      <Button
+        variant="ghost"
+        size="icon"
+        class="size-8 shrink-0 text-muted-foreground"
         title="Show changes"
         aria-label="Show git changes sidebar"
         onclick={onExpandGit}
       >
         <PanelRight class="size-4" />
-      </button>
+      </Button>
     {/if}
   </div>
 </header>

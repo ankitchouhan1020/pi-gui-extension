@@ -2,12 +2,15 @@
 
 pi-gui is a **localhost web shell** over pi’s coding-agent SDK. Same idea as pi itself: stay small at the core, change behavior at the edges.
 
+This tree ships in the **npm package** with the extension so agents can read `AGENTS.md` / `docs/` after `pi install` (customize UI, plugins, routes) without cloning the git repo.
+
 ## How to use these docs
 
 | You want to… | Read first |
 |--------------|------------|
 | Change anything | [boundaries.md](./boundaries.md) |
 | Understand the system | [architecture.md](./architecture.md) |
+| How pi-gui relates to pi (`/gui`, live vs disk) | [ownership.md](./ownership.md) |
 | Customize UI / plugins / theme / API the supported way | [extend/](./extend/index.md) |
 | Look up routes or SSE shapes | [reference/](./reference/index.md) |
 | Do one concrete task | [recipes/](./recipes/index.md) |
@@ -32,3 +35,5 @@ Browser (Svelte)  ──REST + SSE──►  server (node:http)  ──►  pi A
 ```
 
 Power lives in **pi**. This repo is a hub + a browser. Prefer plugins and thin UI changes over rewriting the hub.
+
+For live TUI attach, disk vs live sessions, and `/gui` takeover: [ownership.md](./ownership.md).

@@ -2,6 +2,8 @@
 
 Localhost web UI over pi’s coding-agent SDK. Thin client + multi-session hub; no Express/socket.io.
 
+**In plain terms:** pi is the agent; pi-gui is a browser shell + hub that drives the same `AgentSession` objects and session files. Ownership and `/gui` behavior: [ownership.md](./ownership.md).
+
 ## System context
 
 ```mermaid
@@ -89,7 +91,8 @@ sequenceDiagram
 |---------|----------|
 | Identity | Prefer **hub id** after open; `ensure` reopens by disk id/path |
 | Multi-session | Many open; **per-session** turn queues; activate mutex only for `session_start` |
-| Live TUI attach | `/gui` indexes `AgentSession` (extension patch) → `hub.attach` / `detach` |
+| Live TUI attach | `/gui` indexes `AgentSession` (extension patch) → `hub.attach` / `detach`; multi-bind set |
+| Ownership | **One live writer per session file** — see [ownership.md](./ownership.md) |
 | Transport | REST for commands; **SSE** for stream; no WebSocket |
 | Client truth | `ChatStream`: seq gate + snapshot barrier + id merge |
 | SSE resume | Cold/gap → REST snapshot; hot → ring `seq > after` + live |
@@ -125,10 +128,12 @@ sequenceDiagram
 ## Deploy shapes
 
 ```text
-dev:   Vite :5173  ──proxy /api──►  node server :3847
+dev:   Vite :5173  ──proxy /api──►  node server :3847   (no dist rebuild needed)
 prod:  same process serves dist/ + API on PI_GUI_PORT (default 3847)
-pi:    pi install <pi-gui>  →  /gui opens browser against hub
+pi:    pi install <pi-gui>  →  /gui starts/takes host in TUI process + live attach
 ```
+
+`dist/` is for install/prod static UI. Day-to-day UI work uses `npm run dev:web`.
 
 ## Trust boundary
 
@@ -139,6 +144,7 @@ UI is a dumb shell; agent power lives in the SDK process
 
 ## Related
 
+- [ownership.md](./ownership.md) — relationship to pi, live attach, `/gui`
 - [boundaries.md](./boundaries.md) — edit zones
 - [reference/api.md](./reference/api.md) — routes
 - [reference/events.md](./reference/events.md) — SSE / client merge

@@ -2,8 +2,10 @@
  * Session hub — multi-session AgentSession manager for the web UI.
  * One process, many open sessions; SSE fans out events per session.
  */
-import { mkdirSync, writeFileSync, existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdirSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import {
   createAgentSession,
@@ -11,8 +13,17 @@ import {
   ModelRegistry,
   ModelRuntime,
   parseSessionEntries,
+  ProjectTrustStore,
+  resolveModelScopeWithDiagnostics,
   SessionManager,
+  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import {
+  createSkillMarkdown,
+  describeSkills,
+  readSkillMarkdown,
+  saveSkillMarkdown,
+} from "./skill-workspace.js";
 
 /**
  * Mirror of pi's getDefaultSessionDir (not re-exported from package index).
@@ -30,6 +41,96 @@ function modelRegistry(session) {
   return new ModelRegistry(session.modelRuntime);
 }
 
+/** pi getShareViewerUrl — not re-exported from package index. */
+function shareViewerUrl(gistId) {
+  const base = process.env.PI_SHARE_VIEWER_URL || "https://pi.dev/session/";
+  return `${base}#${gistId}`;
+}
+
+/**
+ * pi getProjectTrustOptions (persistent choices only — no session-only).
+ * @param {string} cwd
+ */
+function projectTrustOptions(cwd) {
+  const trustPath = resolve(cwd);
+  /** @type {{ id: string, label: string, trusted: boolean, updates: { path: string, decision: boolean | null }[] }[]} */
+  const options = [
+    {
+      id: "trust",
+      label: "Trust",
+      trusted: true,
+      updates: [{ path: trustPath, decision: true }],
+    },
+  ];
+  const parentPath = dirname(trustPath);
+  if (parentPath !== trustPath) {
+    options.push({
+      id: "trust-parent",
+      label: `Trust parent folder (${parentPath})`,
+      trusted: true,
+      updates: [
+        { path: parentPath, decision: true },
+        { path: trustPath, decision: null },
+      ],
+    });
+  }
+  options.push({
+    id: "no-trust",
+    label: "Do not trust",
+    trusted: false,
+    updates: [{ path: trustPath, decision: false }],
+  });
+  return options;
+}
+
+/**
+ * Resolve settings `enabledModels` → scoped list (pi /scoped-models + --models).
+ * @param {string} cwd
+ * @param {import("@earendil-works/pi-coding-agent").ModelRuntime} modelRuntime
+ * @param {import("@earendil-works/pi-coding-agent").SettingsManager} [settingsManager]
+ */
+async function resolveScopedFromSettings(cwd, modelRuntime, settingsManager) {
+  const sm =
+    settingsManager ?? SettingsManager.create(cwd, getAgentDir());
+  const patterns = sm.getEnabledModels();
+  if (!patterns?.length) {
+    return { scopedModels: [], settingsManager: sm, patterns: undefined };
+  }
+  const { scopedModels } = await resolveModelScopeWithDiagnostics(
+    patterns,
+    modelRuntime,
+  );
+  return { scopedModels, settingsManager: sm, patterns };
+}
+
+/**
+ * Pick initial model from scope like pi `buildSessionOptions` (new sessions only).
+ * @param {{ model: any, thinkingLevel?: string }[]} scopedModels
+ * @param {import("@earendil-works/pi-coding-agent").SettingsManager} settingsManager
+ * @param {import("@earendil-works/pi-coding-agent").ModelRuntime} modelRuntime
+ */
+function pickModelFromScope(scopedModels, settingsManager, modelRuntime) {
+  if (!scopedModels.length) return {};
+  const savedProvider = settingsManager.getDefaultProvider();
+  const savedModelId = settingsManager.getDefaultModel();
+  const savedModel =
+    savedProvider && savedModelId
+      ? modelRuntime.getModel(savedProvider, savedModelId)
+      : undefined;
+  const hit = savedModel
+    ? scopedModels.find(
+        (sm) =>
+          sm.model.provider === savedModel.provider &&
+          sm.model.id === savedModel.id,
+      )
+    : undefined;
+  const chosen = hit ?? scopedModels[0];
+  return {
+    model: chosen.model,
+    thinkingLevel: chosen.thinkingLevel,
+  };
+}
+
 /** @typedef {import("@earendil-works/pi-coding-agent").AgentSession} AgentSession */
 /** @typedef {import("@earendil-works/pi-coding-agent").SessionInfo} SessionInfo */
 
@@ -43,6 +144,7 @@ function modelRegistry(session) {
  * @property {Set<(ev: unknown, seq: number) => void>} listeners
  * @property {number} sseSeq
  * @property {{ seq: number, event: unknown }[]} sseRing
+ * @property {{ message: string, level: string }[] | undefined} [commandNotifications]
  * @property {ReturnType<typeof setTimeout> | null} [idleTimer]
  * @property {boolean} [bound] true = external (TUI) session; close detaches only
  */
@@ -52,6 +154,26 @@ const SESSION_IDLE_MS = Number(process.env.PI_GUI_SESSION_IDLE_MS ?? 24 * 60 * 6
 
 /** Recent SSE events for Last-Event-ID replay after reconnect. */
 const SSE_RING_MAX = 500;
+
+/**
+ * Extensions may format notifications/status text through ctx.ui.theme. The
+ * web bridge has no terminal theme, so keep the API available while returning
+ * unstyled text for the browser to present itself.
+ */
+const HEADLESS_THEME = Object.freeze({
+  fg: (_color, text) => String(text ?? ""),
+  bg: (_color, text) => String(text ?? ""),
+  bold: (text) => String(text ?? ""),
+  italic: (text) => String(text ?? ""),
+  underline: (text) => String(text ?? ""),
+  inverse: (text) => String(text ?? ""),
+  strikethrough: (text) => String(text ?? ""),
+  getFgAnsi: () => "",
+  getBgAnsi: () => "",
+  getColorMode: () => "truecolor",
+  getThinkingBorderColor: () => (text) => String(text ?? ""),
+  getBashModeBorderColor: () => (text) => String(text ?? ""),
+});
 
 /** Preview text for a session tree entry (for /tree UI). */
 function entryPreview(entry) {
@@ -326,6 +448,66 @@ export class SessionHub {
   }
 
   /**
+   * createAgentSession with pi-parity scoped models from settings.enabledModels.
+   * @param {{ cwd: string; sessionManager: import("@earendil-works/pi-coding-agent").SessionManager }} opts
+   */
+  async #createAgentSession(opts) {
+    const cwd = opts.cwd || process.cwd();
+    const agentDir = getAgentDir();
+    const settingsManager = SettingsManager.create(cwd, agentDir);
+    const modelRuntime = await ModelRuntime.create({
+      authPath: join(agentDir, "auth.json"),
+      modelsPath: join(agentDir, "models.json"),
+    });
+    const { scopedModels } = await resolveScopedFromSettings(
+      cwd,
+      modelRuntime,
+      settingsManager,
+    );
+    const existing = opts.sessionManager.buildSessionContext();
+    const hasExisting = (existing.messages?.length ?? 0) > 0;
+    /** @type {{ model?: any; thinkingLevel?: string }} */
+    let fromScope = {};
+    if (scopedModels.length > 0 && !hasExisting) {
+      fromScope = pickModelFromScope(
+        scopedModels,
+        settingsManager,
+        modelRuntime,
+      );
+    }
+    return createAgentSession({
+      cwd,
+      sessionManager: opts.sessionManager,
+      settingsManager,
+      modelRuntime,
+      scopedModels: scopedModels.length ? scopedModels : undefined,
+      model: fromScope.model,
+      thinkingLevel: fromScope.thinkingLevel,
+    });
+  }
+
+  /**
+   * After extensions bind, re-resolve enabledModels (extension providers now present).
+   * @param {AgentSession} session
+   * @param {string} cwd
+   */
+  async #syncScopedFromSettings(session, cwd) {
+    try {
+      const { scopedModels, patterns } = await resolveScopedFromSettings(
+        cwd,
+        session.modelRuntime,
+      );
+      if (!patterns?.length) return;
+      session.setScopedModels(scopedModels);
+    } catch (err) {
+      console.error(
+        "[pi-gui] scoped models sync failed",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  /**
    * Load packages/extensions once so custom providers (e.g. grok-sdk / grok-agent-cli)
    * appear in GET /api/models even with no open chat session.
    */
@@ -389,6 +571,7 @@ export class SessionHub {
         messageCount: info.messageCount,
         firstMessage: info.firstMessage,
         running: Boolean(running),
+        bound: Boolean(running?.bound),
         streaming: running?.session.isStreaming ?? false,
         model: running
           ? {
@@ -411,6 +594,7 @@ export class SessionHub {
           messageCount: s.session.messages.length,
           firstMessage: "",
           running: true,
+          bound: Boolean(s.bound),
           streaming: s.session.isStreaming,
           model: {
             provider: s.session.model?.provider,
@@ -446,15 +630,14 @@ export class SessionHub {
         const existing = this.#findOpen(opts.path);
         if (existing) return this.#meta(existing);
         const sessionManager = SessionManager.open(opts.path, undefined, cwd);
-        const { session, modelFallbackMessage } = await createAgentSession({
-          cwd,
-          sessionManager,
-        });
+        const { session, modelFallbackMessage } = await this.#createAgentSession(
+          { cwd, sessionManager },
+        );
         return this.#mountSession(session, cwd, modelFallbackMessage);
       });
     }
     const sessionManager = SessionManager.create(cwd);
-    const { session, modelFallbackMessage } = await createAgentSession({
+    const { session, modelFallbackMessage } = await this.#createAgentSession({
       cwd,
       sessionManager,
     });
@@ -468,9 +651,16 @@ export class SessionHub {
    * @param {string} [modelFallbackMessage]
    */
   async #mountSession(session, cwd, modelFallbackMessage) {
+    /** @type {unknown[]} */
+    const pendingUiEvents = [];
+    /** @type {(event: unknown) => void} */
+    let emitUiEvent = (event) => pendingUiEvents.push(event);
     // Fire session_start so extensions (e.g. pi-grok-sdk) bind to this session's cwd.
     // Without this, Grok ACP falls back to process.cwd() (the hub's launch dir).
-    await this.#bindSession(session);
+    await this.#bindSession(session, (event) => emitUiEvent(event));
+
+    // Re-resolve enabledModels now that extension providers are registered.
+    await this.#syncScopedFromSettings(session, cwd);
 
     // SDK restores model before extension providers land in ModelRegistry.
     // Re-apply saved model once providers are registered (bindCore flushes them).
@@ -481,6 +671,8 @@ export class SessionHub {
     );
 
     const entry = this.#registerOpen(session, cwd, { bound: false });
+    emitUiEvent = (event) => this.#fanout(entry, event);
+    for (const event of pendingUiEvents) this.#fanout(entry, event);
     return {
       ...this.#meta(entry),
       modelFallbackMessage: restoredFallback,
@@ -598,10 +790,30 @@ export class SessionHub {
   /**
    * Bind extension lifecycle (session_start). Required for cwd-aware providers.
    * @param {AgentSession} session
+   * @param {(event: unknown) => void} emitUiEvent
    */
-  async #bindSession(session) {
+  async #bindSession(session, emitUiEvent) {
+    const baseUi = session.extensionRunner?.getUIContext?.() ?? {};
     await session.bindExtensions({
       mode: "rpc",
+      uiContext: {
+        ...baseUi,
+        theme: HEADLESS_THEME,
+        notify: (message, level = "info") => {
+          emitUiEvent({
+            type: "extension_notification",
+            message: String(message ?? ""),
+            level,
+          });
+        },
+        setStatus: (key, text) => {
+          emitUiEvent({
+            type: "extension_status",
+            key: String(key ?? ""),
+            text: text == null ? undefined : String(text),
+          });
+        },
+      },
       onError: (err) => {
         console.error(
           `[pi-gui] extension error (${err.extensionPath}):`,
@@ -729,6 +941,17 @@ export class SessionHub {
    * @param {unknown} event
    */
   #fanout(s, event) {
+    if (
+      s.commandNotifications &&
+      event &&
+      typeof event === "object" &&
+      event.type === "extension_notification"
+    ) {
+      s.commandNotifications.push({
+        message: String(event.message ?? ""),
+        level: String(event.level ?? "info"),
+      });
+    }
     const seq = ++s.sseSeq;
     s.sseRing.push({ seq, event });
     if (s.sseRing.length > SSE_RING_MAX) s.sseRing.shift();
@@ -769,6 +992,38 @@ export class SessionHub {
     });
   }
 
+  /** Execute a registered extension slash command and surface its UI output. */
+  async command(id, text) {
+    return this.#runTurn(id, async (s) => {
+      const commandName = String(text ?? "").trim().match(/^\/([^\s]+)/)?.[1] ?? "";
+      const registered = s.session.extensionRunner
+        ?.getRegisteredCommands?.()
+        ?.some((command) => command.invocationName === commandName);
+      if (!registered) throw new Error(`Unknown extension command: /${commandName}`);
+
+      this.#emit(s, { type: "command_start", command: text, name: commandName });
+      s.commandNotifications = [];
+      try {
+        await s.session.prompt(text);
+        const notifications = s.commandNotifications;
+        this.#emit(s, { type: "command_end", command: text, name: commandName, ok: true });
+        return { ok: true, id: s.id, notifications };
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err);
+        this.#emit(s, {
+          type: "command_end",
+          command: text,
+          name: commandName,
+          ok: false,
+          error,
+        });
+        throw err;
+      } finally {
+        s.commandNotifications = undefined;
+      }
+    });
+  }
+
   /** @param {string} id */
   async abort(id) {
     const s = this.require(id);
@@ -788,13 +1043,18 @@ export class SessionHub {
   /**
    * List models from a session's modelRegistry, or the package-warmed registry.
    * Bare ModelRuntime.create() omits extension providers (grok-sdk, cursor, …).
+   * When scoped models are active (pi default model-selector "scoped" scope),
+   * only those models are returned — same as pi's model picker.
    * @param {string} [sessionId]
    */
   async listModels(sessionId) {
+    /** @type {import("@earendil-works/pi-coding-agent").AgentSession | null} */
+    let session = null;
     /** @type {{ getAvailable: () => any[]; getAll: () => any[] } | null | undefined} */
     let reg;
     if (sessionId && this.sessions.has(sessionId)) {
-      reg = modelRegistry(this.sessions.get(sessionId).session);
+      session = this.sessions.get(sessionId).session;
+      reg = modelRegistry(session);
     } else {
       const open = this.sessions.values().next().value;
       reg = open ? modelRegistry(open.session) : await this.#registry();
@@ -802,11 +1062,44 @@ export class SessionHub {
     if (!reg) {
       reg = new ModelRegistry(await ModelRuntime.create());
     }
+
+    // Session with scoped models → only those (pi model selector default)
+    if (session) {
+      const scoped = session.scopedModels ?? [];
+      if (scoped.length > 0) {
+        /** @type {ReturnType<SessionHub["listModels"]> extends Promise<infer R> ? R : never} */
+        const list = scoped.map((sm) => ({
+          provider: sm.model.provider,
+          id: sm.model.id,
+          name: sm.model.name,
+          reasoning: sm.model.reasoning,
+          contextWindow: sm.model.contextWindow,
+          maxTokens: sm.model.maxTokens,
+        }));
+        // Keep current model visible even if outside scope (resume edge case)
+        const cur = session.model;
+        if (
+          cur &&
+          !list.some((m) => m.provider === cur.provider && m.id === cur.id)
+        ) {
+          list.unshift({
+            provider: cur.provider,
+            id: cur.id,
+            name: cur.name,
+            reasoning: cur.reasoning,
+            contextWindow: cur.contextWindow,
+            maxTokens: cur.maxTokens,
+          });
+        }
+        return list;
+      }
+    }
+
     const available = reg.getAvailable();
     // Prefer available; if empty fall back to all. Always merge in providers that
     // are configured but might be missing from a stale "available-only" set.
     const models = available.length ? available : reg.getAll();
-    return models.map((m) => ({
+    let list = models.map((m) => ({
       provider: m.provider,
       id: m.id,
       name: m.name,
@@ -814,6 +1107,42 @@ export class SessionHub {
       contextWindow: m.contextWindow,
       maxTokens: m.maxTokens,
     }));
+
+    // Home / no open scope: still honor settings.enabledModels (pi --models)
+    if (!session) {
+      try {
+        const cwd = process.cwd();
+        const agentDir = getAgentDir();
+        const settingsManager = SettingsManager.create(cwd, agentDir);
+        const patterns = settingsManager.getEnabledModels();
+        if (patterns?.length) {
+          const runtime =
+            this._warmSession?.modelRuntime ??
+            (await ModelRuntime.create({
+              authPath: join(agentDir, "auth.json"),
+              modelsPath: join(agentDir, "models.json"),
+            }));
+          const { scopedModels } = await resolveModelScopeWithDiagnostics(
+            patterns,
+            runtime,
+          );
+          if (scopedModels.length > 0) {
+            list = scopedModels.map((sm) => ({
+              provider: sm.model.provider,
+              id: sm.model.id,
+              name: sm.model.name,
+              reasoning: sm.model.reasoning,
+              contextWindow: sm.model.contextWindow,
+              maxTokens: sm.model.maxTokens,
+            }));
+          }
+        }
+      } catch {
+        /* fall through to full list */
+      }
+    }
+
+    return list;
   }
 
   /**
@@ -845,6 +1174,194 @@ export class SessionHub {
       await s.session.setModel(model);
       return this.#meta(s);
     });
+  }
+
+  /**
+   * Models enabled for Ctrl+P cycling (pi `/scoped-models`).
+   * enabled === null means all models (no scope).
+   * @param {string} id
+   */
+  getScopedModels(id) {
+    const s = this.require(id);
+    const reg = modelRegistry(s.session);
+    const available = reg.getAvailable();
+    const models = (available.length ? available : reg.getAll()).map((m) => ({
+      provider: m.provider,
+      id: m.id,
+      name: m.name,
+    }));
+    const scoped = s.session.scopedModels ?? [];
+    /** @type {string[] | null} */
+    let enabled = null;
+    if (scoped.length > 0) {
+      enabled = scoped.map((sm) => `${sm.model.provider}/${sm.model.id}`);
+    }
+    return { models, enabled };
+  }
+
+  /**
+   * @param {string} id
+   * @param {{ enabled: string[] | null }} body  null = all (clear scope)
+   */
+  setScopedModels(id, body) {
+    const s = this.require(id);
+    const reg = modelRegistry(s.session);
+    const enabled = body.enabled;
+    if (enabled == null) {
+      s.session.setScopedModels([]);
+      // pi Ctrl+S: clear enabledModels → all models for cycle
+      try {
+        SettingsManager.create(s.cwd, getAgentDir()).setEnabledModels(
+          undefined,
+        );
+      } catch {
+        /* ignore settings write */
+      }
+      return this.getScopedModels(id);
+    }
+    if (!Array.isArray(enabled)) {
+      throw new Error("enabled must be string[] or null");
+    }
+    /** @type {{ model: any }[]} */
+    const scoped = [];
+    /** @type {string[]} */
+    const kept = [];
+    for (const full of enabled) {
+      if (typeof full !== "string" || !full.includes("/")) continue;
+      const slash = full.indexOf("/");
+      const provider = full.slice(0, slash);
+      const mid = full.slice(slash + 1);
+      const model = reg.find(provider, mid);
+      if (model) {
+        scoped.push({ model });
+        kept.push(`${model.provider}/${model.id}`);
+      }
+    }
+    s.session.setScopedModels(scoped);
+    // Persist like pi Ctrl+S so next session / TUI share the same scope
+    try {
+      SettingsManager.create(s.cwd, getAgentDir()).setEnabledModels(
+        kept.length ? kept : undefined,
+      );
+    } catch {
+      /* ignore settings write */
+    }
+    return this.getScopedModels(id);
+  }
+
+  /**
+   * pi `/share` — secret GitHub gist of session HTML via `gh`.
+   * @param {string} id
+   */
+  async share(id) {
+    const s = this.require(id);
+    let auth;
+    try {
+      auth = spawnSync("gh", ["auth", "status"], { encoding: "utf-8" });
+    } catch {
+      throw new Error(
+        "GitHub CLI (gh) is not installed. Install it from https://cli.github.com/",
+      );
+    }
+    if (auth.error) {
+      throw new Error(
+        "GitHub CLI (gh) is not installed. Install it from https://cli.github.com/",
+      );
+    }
+    if (auth.status !== 0) {
+      throw new Error("GitHub CLI is not logged in. Run 'gh auth login' first.");
+    }
+
+    const tmpFile = join(tmpdir(), "session.html");
+    await s.session.exportToHtml(tmpFile);
+    try {
+      const result = await new Promise((resolvePromise) => {
+        const proc = spawn("gh", ["gist", "create", "--public=false", tmpFile]);
+        let stdout = "";
+        let stderr = "";
+        proc.stdout?.on("data", (d) => {
+          stdout += d.toString();
+        });
+        proc.stderr?.on("data", (d) => {
+          stderr += d.toString();
+        });
+        proc.on("close", (code) => resolvePromise({ stdout, stderr, code }));
+        proc.on("error", (err) =>
+          resolvePromise({
+            stdout: "",
+            stderr: err.message,
+            code: 1,
+          }),
+        );
+      });
+      if (result.code !== 0) {
+        throw new Error(
+          `Failed to create gist: ${result.stderr?.trim() || "Unknown error"}`,
+        );
+      }
+      const gistUrl = result.stdout?.trim();
+      const gistId = gistUrl?.split("/").pop();
+      if (!gistId) {
+        throw new Error("Failed to parse gist ID from gh output");
+      }
+      return {
+        ok: true,
+        gistUrl,
+        gistId,
+        url: shareViewerUrl(gistId),
+      };
+    } finally {
+      try {
+        unlinkSync(tmpFile);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  /**
+   * pi `/trust` — options + saved decision for session cwd.
+   * @param {string} id
+   */
+  getTrust(id) {
+    const s = this.require(id);
+    const cwd = s.cwd;
+    const store = new ProjectTrustStore(getAgentDir());
+    const saved = store.getEntry(cwd);
+    return {
+      cwd,
+      saved: saved
+        ? { path: saved.path, decision: saved.decision }
+        : null,
+      options: projectTrustOptions(cwd),
+      note: "Writes ~/.pi/agent/trust.json only. Restart pi / open a new session for project resources to reload.",
+    };
+  }
+
+  /**
+   * @param {string} id
+   * @param {{ updates: { path: string, decision: boolean | null }[] }} body
+   */
+  setTrust(id, body) {
+    this.require(id); // ensure session exists (cwd context)
+    const updates = body.updates;
+    if (!Array.isArray(updates)) {
+      throw new Error("updates array required");
+    }
+    const store = new ProjectTrustStore(getAgentDir());
+    store.setMany(
+      updates.map((u) => ({
+        path: String(u.path),
+        decision: u.decision === null ? null : Boolean(u.decision),
+      })),
+    );
+    const trusted = updates.some((u) => u.decision === true);
+    const untrusted = updates.some((u) => u.decision === false);
+    return {
+      ok: true,
+      trusted: trusted ? true : untrusted ? false : null,
+      note: "Saved. Restart pi or open a new session for this to take effect.",
+    };
   }
 
   /** @param {string} id */
@@ -887,7 +1404,7 @@ export class SessionHub {
    * Session entry tree for /tree navigation (slim nodes for the web UI).
    * @param {string} id
    */
-  getTree(id) {
+  async getTree(id) {
     const s = this.require(id);
     const sm = s.session.sessionManager;
     return {
@@ -900,7 +1417,7 @@ export class SessionHub {
    * User messages for pi `/fork` selector.
    * @param {string} id
    */
-  getForkCandidates(id) {
+  async getForkCandidates(id) {
     const s = this.require(id);
     return {
       messages: s.session.getUserMessagesForForking().map((m) => ({
@@ -963,7 +1480,7 @@ export class SessionHub {
       if (!forkedPath) throw new Error("Failed to create forked session");
     }
 
-    const { session, modelFallbackMessage } = await createAgentSession({
+    const { session, modelFallbackMessage } = await this.#createAgentSession({
       cwd,
       sessionManager: forkedSm,
     });
@@ -1117,19 +1634,45 @@ export class SessionHub {
    * Skills loaded for this session (pi `/skill:name`).
    * @param {string} id
    */
-  getSkills(id) {
+  async getSkills(id) {
     const s = this.require(id);
     const loaded = s.session.resourceLoader.getSkills();
-    return {
-      skills: (loaded.skills ?? []).map((sk) => ({
-        name: sk.name,
-        description: sk.description || "",
-        filePath: sk.filePath,
-        disableModelInvocation: Boolean(sk.disableModelInvocation),
-        source: sk.sourceInfo?.source,
-        scope: sk.sourceInfo?.scope,
-      })),
-    };
+    return describeSkills(s.cwd, loaded.skills ?? [], loaded.diagnostics ?? []);
+  }
+
+  /** @param {string} id @param {string} filePath */
+  async getSkillFile(id, filePath) {
+    const s = this.require(id);
+    const loaded = s.session.resourceLoader.getSkills();
+    return readSkillMarkdown(s.cwd, loaded.skills ?? [], filePath);
+  }
+
+  /** @param {string} id @param {{ filePath?: string, content?: string }} input */
+  async saveSkill(id, input) {
+    const s = this.require(id);
+    if (s.session.isStreaming) throw new Error("Wait for the current turn to finish");
+    const loaded = s.session.resourceLoader.getSkills();
+    const saved = await saveSkillMarkdown(
+      s.cwd,
+      loaded.skills ?? [],
+      input?.filePath,
+      input?.content,
+    );
+    await s.session.reload();
+    return { ...saved, workspace: await this.getSkills(id) };
+  }
+
+  /** @param {string} id @param {{ scope?: string, name?: string, content?: string }} input */
+  async createSkill(id, input) {
+    const s = this.require(id);
+    if (s.session.isStreaming) throw new Error("Wait for the current turn to finish");
+    const created = await createSkillMarkdown(s.cwd, {
+      scope: input?.scope === "user" ? "user" : "project",
+      name: input?.name,
+      content: input?.content,
+    });
+    await s.session.reload();
+    return { ...created, workspace: await this.getSkills(id) };
   }
 
   /**
@@ -1155,10 +1698,10 @@ export class SessionHub {
 
   /**
    * Invocable slash commands (extension + prompt templates + skills).
-   * Same set as pi RPC `get_commands` / session.prompt `/name`.
+   * Slash commands: extension commands, prompt templates, and `/skill:name`.
    * @param {string} id
    */
-  getCommands(id) {
+  async getCommands(id) {
     const s = this.require(id);
     const session = s.session;
     /** @type {{ name: string, description: string, source: string, argumentHint?: string, scope?: string }[]} */
@@ -1166,10 +1709,26 @@ export class SessionHub {
     const runner = session.extensionRunner;
     if (runner?.getRegisteredCommands) {
       for (const command of runner.getRegisteredCommands()) {
+        let argumentHint;
+        if (typeof command.getArgumentCompletions === "function") {
+          argumentHint = "<argument>";
+          try {
+            const completions = await command.getArgumentCompletions("");
+            const values = (completions ?? [])
+              .map((item) => String(item?.value ?? item?.label ?? "").trim())
+              .filter(Boolean);
+            if (values.length > 0 && values.length <= 8) {
+              argumentHint = `<${values.join("|")}>`;
+            }
+          } catch {
+            // Completion providers are optional UX; the command remains usable.
+          }
+        }
         commands.push({
           name: command.invocationName,
           description: command.description || "",
           source: "extension",
+          argumentHint,
           scope: command.sourceInfo?.scope,
         });
       }
@@ -1278,6 +1837,8 @@ export class SessionHub {
       path: s.path,
       cwd: s.cwd,
       running: true,
+      /** true = TUI (or external) live attach; close detaches only */
+      bound: Boolean(s.bound),
       streaming: sess.isStreaming,
       messageCount: sess.messages.length,
       name: sess.sessionName,

@@ -465,6 +465,23 @@ async function handleApi(req, res) {
       return json(res, 202, { ok: true, id: s.id });
     }
 
+    // POST /api/sessions/:id/command  { command }
+    id = sessionAction(pathname, "command");
+    if (method === "POST" && id) {
+      const body = await readJson(req);
+      if (typeof body.command !== "string" || !/^\/\S+/.test(body.command.trim())) {
+        return json(res, 400, { error: "command required" });
+      }
+      const s = await hub.ensure(id);
+      try {
+        return json(res, 200, await hub.command(s.id, body.command.trim()));
+      } catch (e) {
+        return json(res, 400, {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
     // POST /api/sessions/:id/abort
     id = sessionAction(pathname, "abort");
     if (method === "POST" && id) {
@@ -478,6 +495,44 @@ async function handleApi(req, res) {
     if (method === "POST" && id) {
       const body = await readJson(req);
       return json(res, 200, await hub.setModel(id, body));
+    }
+
+    // GET|POST /api/sessions/:id/scoped-models — Ctrl+P cycle allowlist (pi /scoped-models)
+    id = sessionAction(pathname, "scoped-models");
+    if (method === "GET" && id) {
+      return json(res, 200, hub.getScopedModels(id));
+    }
+    if (method === "POST" && id) {
+      const body = await readJson(req);
+      return json(res, 200, hub.setScopedModels(id, body));
+    }
+
+    // POST /api/sessions/:id/share — secret GitHub gist (pi /share)
+    id = sessionAction(pathname, "share");
+    if (method === "POST" && id) {
+      try {
+        return json(res, 200, await hub.share(id));
+      } catch (e) {
+        return json(res, 400, {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    // GET|POST /api/sessions/:id/trust — project trust (pi /trust)
+    id = sessionAction(pathname, "trust");
+    if (method === "GET" && id) {
+      return json(res, 200, hub.getTrust(id));
+    }
+    if (method === "POST" && id) {
+      try {
+        const body = await readJson(req);
+        return json(res, 200, hub.setTrust(id, body));
+      } catch (e) {
+        return json(res, 400, {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
     }
 
     // GET|POST /api/sessions/:id/thinking
@@ -501,7 +556,7 @@ async function handleApi(req, res) {
     // POST /api/sessions/:id/tree  { targetId, summarize?, customInstructions? }
     id = sessionAction(pathname, "tree");
     if (method === "GET" && id) {
-      return json(res, 200, hub.getTree(id));
+      return json(res, 200, await hub.getTree(id));
     }
     if (method === "POST" && id) {
       const body = await readJson(req);
@@ -522,7 +577,7 @@ async function handleApi(req, res) {
     // POST /api/sessions/:id/fork  { entryId, position?: "before"|"at" }
     id = sessionAction(pathname, "fork");
     if (method === "GET" && id) {
-      return json(res, 200, hub.getForkCandidates(id));
+      return json(res, 200, await hub.getForkCandidates(id));
     }
     if (method === "POST" && id) {
       const body = await readJson(req);
@@ -603,10 +658,44 @@ async function handleApi(req, res) {
       return json(res, 200, hub.setTools(id, body.active));
     }
 
-    // GET /api/sessions/:id/skills — list skills for /skills palette
+    // GET /api/sessions/:id/skills — skill workspace index
+    // POST /api/sessions/:id/skills — create/import a user or project skill
     id = sessionAction(pathname, "skills");
     if (method === "GET" && id) {
-      return json(res, 200, hub.getSkills(id));
+      return json(res, 200, await hub.getSkills(id));
+    }
+    if (method === "POST" && id) {
+      const body = await readJson(req);
+      try {
+        return json(res, 200, await hub.createSkill(id, body));
+      } catch (e) {
+        return json(res, 400, {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    // GET|PATCH /api/sessions/:id/skill-file — read/save loaded SKILL.md
+    id = sessionAction(pathname, "skill-file");
+    if (method === "GET" && id) {
+      const filePath = searchParams.get("path") || "";
+      try {
+        return json(res, 200, await hub.getSkillFile(id, filePath));
+      } catch (e) {
+        return json(res, 400, {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+    if (method === "PATCH" && id) {
+      const body = await readJson(req);
+      try {
+        return json(res, 200, await hub.saveSkill(id, body));
+      } catch (e) {
+        return json(res, 400, {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
     }
 
     // GET /api/sessions/:id/extensions — list loaded extensions for /extensions palette
@@ -618,7 +707,7 @@ async function handleApi(req, res) {
     // GET /api/sessions/:id/commands — slash commands (extension + prompt + skill)
     id = sessionAction(pathname, "commands");
     if (method === "GET" && id) {
-      return json(res, 200, hub.getCommands(id));
+      return json(res, 200, await hub.getCommands(id));
     }
 
     // GET /api/sessions/:id/git — working tree status

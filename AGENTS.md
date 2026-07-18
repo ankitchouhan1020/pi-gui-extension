@@ -2,11 +2,14 @@
 
 Localhost web UI for pi. Thin Svelte client + multi-session hub over `@earendil-works/pi-coding-agent`.
 
+Shipped with the npm package (`docs/` + this file) so agents working in an install can customize safely without the git repo.
+
 ## Docs map (read selectively)
 
 | Task | Open |
 |------|------|
 | **Any code change** | [docs/boundaries.md](./docs/boundaries.md) first |
+| How pi-gui relates to pi / `/gui` | [docs/ownership.md](./docs/ownership.md) |
 | Customize plugins / theme / UI / API | [docs/extend/](./docs/extend/index.md) |
 | Concrete how-to | [docs/recipes/](./docs/recipes/index.md) |
 | Routes / SSE / tree | [docs/reference/](./docs/reference/index.md) |
@@ -26,6 +29,8 @@ web/src/lib/
 dist/                 # production UI (npm run build)
 docs/                 # LLM-oriented extend + boundaries
 ```
+
+UI source is `web/`; `dist/` is build output (what the server ships).
 
 ## Run
 

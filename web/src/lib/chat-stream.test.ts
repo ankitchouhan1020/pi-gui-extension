@@ -30,6 +30,37 @@ describe("needSnapshot / shouldReplayRing", () => {
       false,
     );
   });
+
+  it("forces snapshot when client lastSeq is ahead of server (reopen)", () => {
+    // GUI had seq 50; hub reopened session → server seq 0/ringStart 1
+    assert.equal(
+      needSnapshot(50, { seq: 0, ringStart: 1 }, true),
+      true,
+    );
+    assert.equal(
+      needSnapshot(50, { seq: 12, ringStart: 1 }, true),
+      true,
+    );
+    // Normal hot resume: client behind/at server high-water, ring covers gap
+    assert.equal(
+      needSnapshot(9, { seq: 12, ringStart: 8 }, true),
+      false,
+    );
+  });
+});
+
+describe("commitSnapshot resets lastSeq to server", () => {
+  it("adopts server high-water even when lower than stale client cursor", () => {
+    const s = new ChatStream();
+    s.bindSession("s-reopen");
+    s.lastSeq = 50;
+    s.commitSnapshot(
+      [{ role: "user", content: "hi", id: "u1" }],
+      3,
+    );
+    assert.equal(s.lastSeq, 3);
+    assert.equal(s.messages.length, 1);
+  });
 });
 
 describe("messageIdentity", () => {
@@ -122,6 +153,21 @@ describe("ChatStream message merge", () => {
     assert.ok(String(s.messages[0]._key).startsWith("c:"));
   });
 
+  it("preserves selected skill presentation metadata when the server row lands", () => {
+    const s = new ChatStream();
+    s.bindSession("s-skill");
+    s.commitSnapshot([], 0);
+    s.pushOptimisticUser("/ponytail-audit", { skillName: "ponytail-audit" });
+
+    s.handleFrame(1, {
+      type: "message_start",
+      message: { role: "user", id: "u-skill", content: "/skill:ponytail-audit" },
+    });
+
+    assert.equal(s.messages.length, 1);
+    assert.equal(s.messages[0]._skillName, "ponytail-audit");
+  });
+
   it("does not collapse two assistants via role", () => {
     const s = new ChatStream();
     s.bindSession("s4");
@@ -205,9 +251,127 @@ describe("preserveOptimistic", () => {
     assert.equal(out[0].id, "u1");
     assert.equal(out[0]._key, "c:1");
   });
+
+  it("reconciles a slash command transformed by pi without duplicating the prompt", () => {
+    const now = Date.now();
+    const local: ChatMessage[] = [
+      {
+        role: "user",
+        content: "/ponytail-audit",
+        timestamp: now,
+        _key: "c:slash",
+        _skillName: "ponytail-audit",
+      },
+    ];
+    const out = preserveOptimistic(local, [
+      {
+        role: "user",
+        content: "/skill:ponytail-audit",
+        timestamp: now + 20,
+        id: "u-skill",
+      },
+    ]);
+
+    assert.equal(out.length, 1);
+    assert.equal(out[0].content, "/skill:ponytail-audit");
+    assert.equal(out[0]._key, "c:slash");
+    assert.equal(out[0]._skillName, "ponytail-audit");
+  });
+
+  it("does not consume an older unrelated server prompt for a slash command", () => {
+    const now = Date.now();
+    const local: ChatMessage[] = [
+      {
+        role: "user",
+        content: "/new-command",
+        timestamp: now,
+        _key: "c:new",
+      },
+    ];
+    const out = preserveOptimistic(local, [
+      {
+        role: "user",
+        content: "an older prompt",
+        timestamp: now - 60_000,
+        id: "u-old",
+      },
+    ]);
+
+    assert.equal(out.length, 2);
+    assert.equal(out[1]._key, "c:new");
+  });
+
+  it("does not reconcile unrelated recent slash commands by timing alone", () => {
+    const now = Date.now();
+    const out = preserveOptimistic(
+      [{ role: "user", content: "/compact", timestamp: now, _key: "c:compact" }],
+      [{ role: "user", content: "/model", timestamp: now + 10, id: "u-model" }],
+    );
+
+    assert.equal(out.length, 2);
+    assert.equal(out[1]._key, "c:compact");
+  });
+
+  it("keeps transient extension command rows across a server snapshot", () => {
+    const command = {
+      role: "command",
+      command: "/headroom status",
+      _commandId: "command-1",
+      _commandStatus: "done",
+      _commandOutput: "Headroom enabled",
+      _key: "c:command-1",
+    };
+    assert.deepEqual(preserveOptimistic([command], []), [command]);
+  });
 });
 
 describe("ChatStream event effects", () => {
+  it("renders extension command notifications and completion on one command row", () => {
+    const s = new ChatStream();
+    s.bindSession("s-command");
+    s.commitSnapshot([], 0);
+    s.pushCommand("/headroom", "headroom");
+    s.handleFrame(1, { type: "command_start", command: "/headroom" });
+
+    s.handleFrame(2, {
+      type: "extension_notification",
+      message: "Headroom enabled",
+      level: "info",
+    });
+    s.handleFrame(3, {
+      type: "extension_notification",
+      message: "Proxy online",
+      level: "warning",
+    });
+    s.handleFrame(4, {
+      type: "extension_notification",
+      message: "Status refreshed",
+      level: "info",
+    });
+    const commandEndEffects = s.handleFrame(5, { type: "command_end", ok: true });
+
+    assert.equal(s.messages.length, 1);
+    assert.equal(s.messages[0].role, "command");
+    assert.equal(s.messages[0]._commandStatus, "done");
+    assert.equal(s.messages[0]._commandLevel, "warning");
+    assert.equal(
+      s.messages[0]._commandOutput,
+      "Headroom enabled\n\nProxy online\n\nStatus refreshed",
+    );
+    assert.equal(s.phase, "idle");
+    assert.deepEqual(commandEndEffects.at(-1), { type: "settled", reload: false });
+  });
+
+  it("completes a command from the HTTP response when SSE frames are missed", () => {
+    const s = new ChatStream();
+    s.bindSession("s-command-http");
+    s.pushCommand("/headroom status", "headroom");
+    s.completeCommand([{ message: "Headroom enabled", level: "info" }]);
+    assert.equal(s.messages[0]._commandStatus, "done");
+    assert.equal(s.messages[0]._commandOutput, "Headroom enabled");
+    assert.equal(s.phase, "idle");
+  });
+
   it("merges toolResult by toolCallId only", () => {
     const s = new ChatStream();
     s.bindSession("s-tr");

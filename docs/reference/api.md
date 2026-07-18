@@ -13,7 +13,7 @@ Source of truth: `server/http.js`. Client wrappers: `web/src/lib/api.ts`.
 | GET | `/api/changelog` | pi package CHANGELOG (Cmd+K) |
 | GET | `/api/models?sessionId=` | models (optional warmed session) |
 | GET | `/api/fs?path=` | list subdirs (folder picker) |
-| GET | `/api/sessions?cwd=` | open + disk sessions |
+| GET | `/api/sessions?cwd=` | open + disk sessions (`running`, `bound` = live TUI attach) |
 | POST | `/api/sessions` | open/create (`path?`, `cwd?`, `fresh?`, `content?`, `filename?`) |
 
 ## Session
@@ -36,7 +36,8 @@ Source of truth: `server/http.js`. Client wrappers: `web/src/lib/api.ts`.
 | GET/POST | `/api/sessions/:id/tree` | tree / navigate (`{ targetId, summarize?, … }`) |
 | GET/POST | `/api/sessions/:id/fork` | candidates / fork (`{ entryId, position? }`) |
 | GET/POST | `/api/sessions/:id/tools` | list / set active tools |
-| GET | `/api/sessions/:id/skills` | skills |
+| GET/POST | `/api/sessions/:id/skills` | skill workspace index / create or import user/project skill |
+| GET/PATCH | `/api/sessions/:id/skill-file` | read / save a loaded `SKILL.md` (`?path=` for GET) |
 | GET | `/api/sessions/:id/extensions` | loaded extensions |
 | GET | `/api/sessions/:id/commands` | slash commands (extension + prompt + skill) |
 | GET | `/api/sessions/:id/git` | working-tree status; `?path=` → file diff |

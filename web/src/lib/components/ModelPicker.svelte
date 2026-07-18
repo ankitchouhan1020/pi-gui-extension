@@ -2,6 +2,16 @@
   import type { ModelInfo } from "$lib/api";
   /** Shared across ModelPicker instances for the page lifetime. */
   const ModelPicker_cache = new Map<string, ModelInfo[]>();
+
+  /** Bust after scoped-models Apply so the select reflects the new set. */
+  export function clearModelPickerCache(sessionId?: string) {
+    if (sessionId) {
+      ModelPicker_cache.delete(`s:${sessionId}`);
+      ModelPicker_cache.delete("full");
+    } else {
+      ModelPicker_cache.clear();
+    }
+  }
 </script>
 
 <script lang="ts">
@@ -48,35 +58,23 @@
     return list;
   });
 
-  async function load() {
+  async function load(force = false) {
     if (loading) return;
-    // Cache key must not poison session lists with a no-session bare registry
-    // (that list lacks extension providers like grok-sdk / grok-agent-cli).
+    // Don't reuse "full" unscoped cache for a session — scope may filter the list.
     const key = sessionId ? `s:${sessionId}` : "home";
-    const hit = cache.get(key) ?? (sessionId ? cache.get("full") : undefined);
-    if (hit?.length) {
-      models = hit;
-      return;
+    if (!force) {
+      const hit = cache.get(key);
+      if (hit?.length) {
+        models = hit;
+        return;
+      }
     }
     loading = true;
     try {
       const res = await listModels(sessionId || undefined);
       models = res.models ?? [];
-      if (models.length) {
-        cache.set(key, models);
-        // "full" = list known to include package providers (any open/warmed registry)
-        if (
-          sessionId ||
-          models.some(
-            (m) =>
-              m.provider === "grok-sdk" ||
-              m.provider === "grok-agent-cli" ||
-              m.provider === "cursor",
-          )
-        ) {
-          cache.set("full", models);
-        }
-      }
+      if (models.length) cache.set(key, models);
+      else cache.delete(key);
     } catch {
       /* leave empty; retry when sessionId effect re-runs or parent remounts */
     } finally {
@@ -148,7 +146,7 @@
     title={model?.provider && model?.id ? `${model.provider}/${model.id}` : "Model"}
   >
     {#if !value}
-      <option value="" disabled>Model…</option>
+      <option value="" disabled>Model</option>
     {/if}
     {#each options as m (`${m.provider}/${m.id}`)}
       <option value={`${m.provider}::${m.id}`}>

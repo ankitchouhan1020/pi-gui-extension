@@ -129,7 +129,7 @@
       </div>
       <div class="max-h-48 overflow-y-auto py-1">
         {#if loading}
-          <div class="px-3 py-2 text-[11px] text-muted-foreground">Loading…</div>
+          <div class="px-3 py-2 text-[11px] text-muted-foreground">Loading</div>
         {:else if err}
           <div class="px-3 py-2 text-[11px] text-destructive">{err}</div>
         {:else if entries.length === 0}

@@ -429,7 +429,7 @@
       >
         <div class="flex flex-col gap-0.5 p-1.5">
           {#if loading && !status}
-            <div class="px-2 py-6 text-center text-xs text-muted-foreground">Loading…</div>
+            <div class="px-2 py-6 text-center text-xs text-muted-foreground">Loading</div>
           {:else if fileCount === 0}
             <div class="flex flex-col items-center gap-1.5 px-2 py-10 text-center">
               <p class="text-xs font-medium text-foreground/80">No changes</p>
@@ -500,7 +500,7 @@
           <div class="min-h-0 flex-1 overflow-auto">
             {#if patchLoading}
               <div class="px-3 py-8 text-center text-xs text-muted-foreground">
-                Loading diff…
+                Loading diff
               </div>
             {:else if patchErr}
               <div class="px-3 py-6 text-center text-xs text-destructive">{patchErr}</div>

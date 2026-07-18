@@ -7,6 +7,7 @@
 <script lang="ts">
   import type {
     ChatMessage as ChatMsg,
+    ChatPromptOptions,
     PromptImage,
     SessionRow,
   } from "$lib/api";
@@ -18,42 +19,44 @@
     getMessages,
     getSession,
     isPairedToolResult,
+    listCommands,
     listForkCandidates,
     messageKey,
     messageText,
     navigateTree,
     prompt,
     registerChatPrompt,
+    runCommand,
     steer,
     subscribeEvents,
     takePendingEditorText,
+    type ForkCandidate,
+    type SlashCommandInfo,
   } from "$lib/api";
   import {
     ChatStream,
     type ConnectedInfo,
     type StreamEffect,
   } from "$lib/chat-stream";
-  import X from "@lucide/svelte/icons/x";
-  import ComposerPlus from "$lib/components/ComposerPlus.svelte";
-  import FolderPicker from "$lib/components/FolderPicker.svelte";
+  import { BUILTIN_SLASH_COMMANDS } from "$lib/slash-builtins";
+  import { skillNameForSlashCommand } from "$lib/special-message";
+  import {
+    formatWorkDuration,
+    hasAssistantWork,
+    isComposerCommand,
+    isFinalAssistantResponse,
+    messageTimestamp,
+    startsTopLevelTurn,
+  } from "$lib/work-section";
+  import ChatComposer from "$lib/components/ChatComposer.svelte";
   import MessageBubble from "$lib/components/MessageBubble.svelte";
-  import ModelPicker from "$lib/components/ModelPicker.svelte";
+  import SlashMenu from "$lib/components/SlashMenu.svelte";
   import StatusBar from "$lib/components/StatusBar.svelte";
   import Button from "agentic-ui-kit/components/ui/button.svelte";
   import PanelLeft from "@lucide/svelte/icons/panel-left";
   import PanelRight from "@lucide/svelte/icons/panel-right";
-  import {
-    PromptInput,
-    PromptInputTextarea,
-    PromptInputActions,
-    PromptInputAction,
-  } from "agentic-ui-kit/components/prompt-kit/index.js";
-  import Loader from "agentic-ui-kit/components/prompt-kit/loader.svelte";
   import { onDestroy, tick, untrack } from "svelte";
-  import ArrowUp from "@lucide/svelte/icons/arrow-up";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
-  import Square from "@lucide/svelte/icons/square";
-  import Folder from "@lucide/svelte/icons/folder";
 
   const LS_CWD = "pi-gui-last-cwd";
   const LS_MODEL = "pi-gui-last-model";
@@ -139,6 +142,14 @@
       cwd?: string;
       model?: { provider?: string; id?: string };
     }) => Promise<SessionRow>;
+    /** pi builtin slash (`/model`, `/compact`, …). */
+    onBuiltinSlash?: (name: string) => void;
+    onRequestFork?: (candidate: ForkCandidate) => void;
+    treeNavigation?: {
+      token: number;
+      sessionId: string;
+      editorText?: string;
+    } | null;
     /** Show expand controls in chat header when side panels are collapsed. */
     showExpandSidebar?: boolean;
     showExpandGit?: boolean;
@@ -152,6 +163,9 @@
     forceCwd = null,
     onSessionUpdate,
     onEnsureSession,
+    onBuiltinSlash,
+    onRequestFork,
+    treeNavigation = null,
     showExpandSidebar = false,
     showExpandGit = false,
     onExpandSidebar,
@@ -166,12 +180,27 @@
   let bashRunning = $state(false);
   let error = $state<string | null>(null);
   /** Last failed prompt — Retry re-sends without retyping. */
-  let failedPrompt = $state<{ text: string; images: PromptImage[] } | null>(
+  let failedPrompt = $state<{
+    text: string;
+    images: PromptImage[];
+    options?: ChatPromptOptions;
+  } | null>(
     null,
   );
   /** Pending image attachments (paste / drop). */
   type Attach = PromptImage & { preview: string };
   let attachments = $state<Attach[]>([]);
+  let editEpoch = 0;
+  let inlineEditSubmitting = $state(false);
+  let appliedTreeNavigationToken = 0;
+  let editing = $state<{
+    token: number;
+    index: number;
+    message: ChatMsg;
+    entryId: string | null;
+    restoreDraft: string;
+    restoreAttachments: Attach[];
+  } | null>(null);
   let closeEs: (() => void) | null = null;
   let scroller: HTMLDivElement | undefined = $state();
   let sending = $state(false);
@@ -186,11 +215,6 @@
   let model = $state<SessionRow["model"]>(readLastModel());
   /** Folder for next new session (home only). */
   let draftCwd = $state(readLastCwd());
-
-  function shortFolder(p: string) {
-    const segs = p.split("/").filter(Boolean);
-    return segs.slice(-2).join("/") || p;
-  }
 
   // Fallback to server cwd only if we have no remembered path
   $effect(() => {
@@ -240,6 +264,77 @@
   );
   const busy = $derived(streaming || bashRunning);
 
+  /** pi-style `/` menu: only while draft is `/query` (no args yet). */
+  let slashRemote = $state<SlashCommandInfo[]>([]);
+  let slashLoadedFor = $state<string | null>(null);
+  let slashIdx = $state(0);
+  let slashHide = $state(false);
+  const slashQuery = $derived(
+    /^\/(\S*)$/.test(draft) ? draft.slice(1).toLowerCase() : null,
+  );
+  const slashCmds = $derived.by(() => {
+    const remote = slashRemote;
+    const taken = new Set(remote.map((c) => c.name));
+    const builtins = BUILTIN_SLASH_COMMANDS.filter((b) => {
+      if (taken.has(b.name)) return false;
+      if (b.needsSession === false) return true;
+      return Boolean(session?.id);
+    });
+    return [...builtins, ...remote] as SlashCommandInfo[];
+  });
+  const slashFiltered = $derived.by(() => {
+    if (slashQuery === null) return [] as SlashCommandInfo[];
+    const q = slashQuery;
+    const scored = slashCmds
+      .filter((c) => c.name)
+      .map((c) => {
+        const n = c.name.toLowerCase();
+        if (!q) return { c, s: 0 };
+        if (n.startsWith(q)) return { c, s: 0 };
+        if (n.includes(q)) return { c, s: 1 };
+        if ((c.description || "").toLowerCase().includes(q)) return { c, s: 2 };
+        return null;
+      })
+      .filter((x): x is { c: SlashCommandInfo; s: number } => x != null)
+      .sort((a, b) => a.s - b.s || a.c.name.localeCompare(b.c.name));
+    return scored.map((x) => x.c);
+  });
+  const slashOpen = $derived(
+    slashQuery !== null && !slashHide && slashFiltered.length > 0,
+  );
+
+  $effect(() => {
+    void draft;
+    slashHide = false;
+  });
+
+  $effect(() => {
+    const id = session?.id;
+    if (!id || slashQuery === null) return;
+    if (slashLoadedFor === id) return;
+    slashRemote = [];
+    let cancelled = false;
+    void listCommands(id)
+      .then((res) => {
+        if (cancelled) return;
+        slashRemote = res.commands ?? [];
+        slashLoadedFor = id;
+      })
+      .catch(() => {
+        if (cancelled) return;
+        slashRemote = [];
+        slashLoadedFor = id;
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  $effect(() => {
+    void slashFiltered;
+    slashIdx = 0;
+  });
+
   // pi-tui Loader frames — mutate DOM only (no $state → no chat re-render/scroll jump)
   const PI_SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
   let spinEl: HTMLSpanElement | undefined = $state();
@@ -281,6 +376,8 @@
   async function scrollBottom() {
     stickBottom = true;
     await tick();
+    // Home ↔ thread swaps the scroller; wait one frame if still missing.
+    if (!scroller) await new Promise<void>((r) => requestAnimationFrame(() => r()));
     if (!scroller) return;
     progScroll = true;
     scroller.scrollTop = scroller.scrollHeight;
@@ -302,7 +399,14 @@
 
   /** Keep tail in view while stickBottom (submit re-enables stick). */
   function stickScroll() {
-    if (!scroller || !stickBottom || progScroll) return;
+    if (!stickBottom || progScroll) return;
+    if (!scroller) {
+      // messages just painted; scroller may mount next tick (left home)
+      void tick().then(() => {
+        if (stickBottom && scroller) stickScroll();
+      });
+      return;
+    }
     progScroll = true;
     scroller.scrollTop = scroller.scrollHeight;
     requestAnimationFrame(() => {
@@ -377,6 +481,8 @@
           void runSnapshot(id, ef.info);
           break;
         case "resumed":
+          // Hot ring resume — still revalidate REST so disk/TUI progress is not missed
+          void load(id, { force: true, quiet: true });
           void catchUp(id);
           break;
         case "messages":
@@ -388,7 +494,7 @@
         case "settled":
           paintNow = true;
           clearTurnBusy();
-          if (wiredId === id) {
+          if (wiredId === id && ef.reload !== false) {
             void load(id, { quiet: true });
             scheduleMeta(id);
           }
@@ -427,7 +533,10 @@
           }
           break;
         case "tree_navigated":
-          if (ef.editorText) draft = ef.editorText;
+          // Match Pi: tree navigation never clobbers text already in the editor.
+          if (ef.editorText && !inlineEditSubmitting && !draft.trim()) {
+            draft = ef.editorText;
+          }
           if (wiredId) {
             void load(wiredId, { force: true }).then(() => loadMeta(wiredId!));
           }
@@ -453,26 +562,102 @@
     }
   }
 
-  /** Edit user message: navigate tree to that entry, put text in draft. */
-  async function editUserMessage(msg: ChatMsg) {
-    if (!session?.id || busy) return;
+  async function findForkEntry(msg: ChatMsg) {
+    if (!session?.id) return null;
+    const body = messageText(msg).trim();
+    if (!body) return null;
+    const { messages: forks } = await listForkCandidates(session.id);
+    return (
+      [...forks].reverse().find((f) => f.text === body) ??
+      forks.find((f) => f.text.trim() === body) ??
+      null
+    );
+  }
+
+  /** Replace a user bubble with the composer; tree navigation happens on submit. */
+  async function editUserMessage(msg: ChatMsg, index: number) {
+    if (!session?.id || busy || sending) return;
     const body = messageText(msg).trim();
     if (!body) return;
+    const token = {
+      token: ++editEpoch,
+      index,
+      message: msg,
+      entryId: null,
+      restoreDraft: draft,
+      restoreAttachments: attachments,
+    };
+    editing = token;
+    draft = body;
+    attachments = [];
+    focusComposer();
     try {
-      const { messages: forks } = await listForkCandidates(session.id);
-      const hit =
-        [...forks].reverse().find((f) => f.text === body) ??
-        forks.find((f) => f.text.trim() === body);
-      if (hit?.entryId) {
-        await navigateTree(session.id, hit.entryId);
-        // tree_navigated sets draft + reloads; ensure draft if SSE missed
-        if (!draft.trim()) draft = body;
-      } else {
-        draft = body;
+      const hit = await findForkEntry(msg);
+      if (editing?.token === token.token) editing.entryId = hit?.entryId ?? null;
+    } catch (err) {
+      if (editing?.token === token.token) {
+        error = err instanceof Error ? err.message : String(err);
       }
+    }
+  }
+
+  function cancelInlineEdit() {
+    const current = editing;
+    if (!current || sending || inlineEditSubmitting) return;
+    editing = null;
+    draft = current.restoreDraft;
+    attachments = current.restoreAttachments;
+    focusComposer();
+  }
+
+  async function submitInlineEdit() {
+    const current = editing;
+    const id = session?.id;
+    const editedText = draft.trim();
+    if (
+      !current ||
+      !id ||
+      sending ||
+      inlineEditSubmitting ||
+      (!editedText && attachments.length === 0)
+    ) return;
+
+    error = null;
+    inlineEditSubmitting = true;
+    let entryId = current.entryId;
+    try {
+      if (!entryId) {
+        entryId = (await findForkEntry(current.message))?.entryId ?? null;
+      }
+      if (!entryId) throw new Error("Could not locate this message in the session tree");
+
+      const result = await navigateTree(id, entryId);
+      if (result.cancelled || result.aborted) return;
+
+      // Reconcile the shortened branch before adding the edited optimistic message.
+      await load(id, { force: true, quiet: true });
+      draft = editedText;
+      editing = null;
+      await send("default");
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
-      draft = body;
+      draft = editedText;
+      focusComposer();
+    } finally {
+      window.setTimeout(() => {
+        inlineEditSubmitting = false;
+      }, 1000);
+    }
+  }
+
+  async function forkUserMessage(msg: ChatMsg) {
+    if (!session?.id || busy || !messageText(msg).trim()) return;
+    try {
+      const hit = await findForkEntry(msg);
+      if (!hit?.entryId) throw new Error("Could not locate this message in the session tree");
+      onRequestFork?.(hit);
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
     }
   }
 
@@ -489,8 +674,25 @@
   /** Server reported streaming this turn — idle then means settle (SSE may have been missed). */
   let sawServerStreaming = false;
   let lastPromptAt = 0;
+  let workDurations = $state<Record<string, number>>({});
+
+  function recordWorkDuration() {
+    if (!(lastPromptAt > 0)) return;
+    const list = stream.messages;
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (list[i]?.role !== "user") continue;
+      const key = messageKey(list[i]!, i);
+      workDurations = {
+        ...workDurations,
+        [key]: Math.max(0, Date.now() - lastPromptAt),
+      };
+      break;
+    }
+    lastPromptAt = 0;
+  }
 
   function clearTurnBusy() {
+    recordWorkDuration();
     stream.clearTurn();
     awaitingSettle = false;
     sawServerStreaming = false;
@@ -538,6 +740,7 @@
       syncTurnFlags();
       applyEffects(effects, id);
       paintMessages(false);
+      if (stickBottom) void scrollBottom();
       scheduleMeta(id);
     } catch {
       /* transient — turnWatch / next connected will retry */
@@ -634,7 +837,8 @@
       if (stream.isSnapshotting && !opts?.force) return;
       stream.reconcileFromServer(m, { force: opts?.force });
       paintMessages(false);
-      if (!opts?.quiet) scrollBottom();
+      if (!opts?.quiet) void scrollBottom();
+      else if (stickBottom) stickScroll();
       else requestAnimationFrame(measureStick);
     } catch (err) {
       if (wiredId !== id) return;
@@ -679,6 +883,19 @@
     );
   }
 
+  /** Focus the inline editor first, otherwise the home/footer composer. */
+  function focusComposer() {
+    void tick().then(() => {
+      const el = document.querySelector(
+        "section.chat-canvas [data-inline-message-editor] [data-slot=textarea], section.chat-canvas [data-slot=textarea]",
+      ) as HTMLTextAreaElement | null;
+      el?.focus();
+      if (editing) {
+        el?.setSelectionRange(el.value.length, el.value.length);
+      }
+    });
+  }
+
   // Only re-bind when session *id* changes — not on meta patches (flicker root cause)
   $effect(() => {
     const id = session?.id ?? null;
@@ -704,11 +921,14 @@
         draftOwner = null;
         draft = readDraft(null);
         messages = [];
+        workDurations = {};
+        lastPromptAt = 0;
         streaming = false;
         bashRunning = false;
         showAllMsgs = false;
         failedPrompt = null;
         attachments = [];
+        editing = null;
         // Home: keep last session path + model prefilled
         model = readLastModel();
         draftCwd = readLastCwd() || defaultCwd || draftCwd;
@@ -718,6 +938,7 @@
         closeEs = null;
         wiredId = null;
       });
+      focusComposer();
       return;
     }
 
@@ -740,9 +961,11 @@
       showAllMsgs = false;
       failedPrompt = null;
       attachments = [];
+      editing = null;
       const cached = historyCache.get(id);
       stream.bindSession(id, { messages: cached });
       messages = stream.messages.slice();
+      workDurations = {};
       streaming = false;
       bashRunning = false;
       awaitingSettle = false;
@@ -763,9 +986,10 @@
       // Resume (lastSeq > 0) also wires with ?after= for ring fill.
       wire(id);
       scheduleMeta(id);
-      // Paint cache immediately; snapshot/resume will reconcile
-      if (messages.length) void scrollBottom();
+      // Always land on last message (cache or empty → snapshot will stick-scroll)
+      void scrollBottom();
     });
+    focusComposer();
 
     return () => {
       // Leaving this session id — cache + close SSE only if still owner
@@ -777,6 +1001,33 @@
         closeEs = null;
       }
     };
+  });
+
+  // The POST response is the reliable completion signal. SSE still updates live
+  // clients, while this one-shot reconciliation prevents a successful tree jump
+  // from appearing to do nothing when its echo is missed by the active stream.
+  $effect(() => {
+    const navigation = treeNavigation;
+    if (
+      !navigation ||
+      navigation.token === appliedTreeNavigationToken ||
+      navigation.sessionId !== wiredId
+    ) return;
+
+    appliedTreeNavigationToken = navigation.token;
+    untrack(() => {
+      if (
+        navigation.editorText &&
+        !inlineEditSubmitting &&
+        !draft.trim()
+      ) {
+        draft = navigation.editorText;
+      }
+      void load(navigation.sessionId, { force: true }).then(() =>
+        loadMeta(navigation.sessionId),
+      );
+      focusComposer();
+    });
   });
 
   // Tab/window focus → revalidate active session history
@@ -888,15 +1139,31 @@
     const text = draft.trim();
     const imgs = takeImages();
     draft = "";
-    await sendText(text, mode, imgs);
+    await sendText(text, mode, imgs, chatOptionsForSlashText(text));
+  }
+
+  function chatOptionsForSlashText(
+    text: string,
+    commands: SlashCommandInfo[] = slashCmds,
+  ): ChatPromptOptions | undefined {
+    const name = text.trim().match(/^\/([^\s]+)/)?.[1];
+    if (!name) return undefined;
+    const command = commands.find((item) => item.name === name);
+    if (!command) return undefined;
+    const skillName = skillNameForSlashCommand(command, commands);
+    return {
+      ...(skillName ? { skillName } : {}),
+      commandName: command.name,
+      commandSource: command.source,
+    };
   }
 
   async function retryFailed() {
     if (!failedPrompt || sending) return;
-    const { text, images } = failedPrompt;
+    const { text, images, options } = failedPrompt;
     failedPrompt = null;
     error = null;
-    await sendText(text, "default", images);
+    await sendText(text, "default", images, options);
   }
 
   /** Shared by composer + palette (skills, etc.). */
@@ -904,6 +1171,7 @@
     text: string,
     mode: "default" | "followUp" = "default",
     images: PromptImage[] = [],
+    options?: ChatPromptOptions,
   ) {
     const body = text.trim();
     if ((!body && images.length === 0) || sending) return;
@@ -916,14 +1184,62 @@
       id = await resolveSessionId();
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
-      failedPrompt = { text: body, images };
+      failedPrompt = { text: body, images, options };
       sending = false;
       return;
     }
     if (!id) {
       error = "Could not open session";
-      failedPrompt = { text: body, images };
+      failedPrompt = { text: body, images, options };
       sending = false;
+      return;
+    }
+
+    // A command can be submitted before a new session's slash metadata has
+    // loaded (or immediately after opening an existing session). Resolve it
+    // against the session before falling through to the normal prompt path.
+    if (body.startsWith("/") && !options?.commandSource) {
+      try {
+        const remote = (await listCommands(id)).commands ?? [];
+        slashRemote = remote;
+        slashLoadedFor = id;
+        options = chatOptionsForSlashText(body, remote) ?? options;
+      } catch {
+        // Preserve pi's normal prompt handling if command discovery fails.
+      }
+    }
+
+    if (options?.commandSource === "extension" && options.commandName) {
+      // Match the normal prompt path: a just-created session must own its SSE
+      // stream before the optimistic command row is added, otherwise the
+      // parent session update can reset and erase it.
+      if (wiredId !== id) {
+        const prev = wiredId;
+        if (prev) {
+          flush();
+          cacheHistory(prev, messages);
+          closeEs?.();
+        }
+        wiredId = id;
+        stream.bindSession(id, { messages: stream.messages });
+        wire(id);
+      }
+      if (options.skillName) stream.pushOptimisticUser(body, options);
+      else stream.pushCommand(body, options.commandName);
+      paintMessages(false);
+      syncTurnFlags();
+      void scrollBottom();
+      try {
+        const result = await runCommand(id, body);
+        if (stream.completeCommand(result.notifications, true)) paintMessages(false);
+        syncTurnFlags();
+      } catch (err) {
+        error = err instanceof Error ? err.message : String(err);
+        if (stream.finishCommand(false, error)) paintMessages(false);
+        syncTurnFlags();
+      } finally {
+        sending = false;
+      }
       return;
     }
 
@@ -991,7 +1307,7 @@
                 })),
               ]
             : body;
-        stream.pushOptimisticUser(content);
+        stream.pushOptimisticUser(content, options);
         paintMessages(false);
         startedTurn = true;
         syncTurnFlags();
@@ -1007,7 +1323,7 @@
       }
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
-      failedPrompt = { text: body, images };
+      failedPrompt = { text: body, images, options };
       if (startedTurn) clearTurnBusy();
     } finally {
       sending = false;
@@ -1016,11 +1332,63 @@
 
   // Palette / skills call chatPrompt() → same optimistic path as typing in the composer
   $effect(() => {
-    registerChatPrompt((text) => sendText(text));
+    registerChatPrompt((text, options) => sendText(text, "default", [], options));
     return () => registerChatPrompt(null);
   });
 
+  function pickSlash(cmd: SlashCommandInfo) {
+    if (!cmd.name) return;
+    if (cmd.source === "builtin") {
+      draft = "";
+      onBuiltinSlash?.(cmd.name);
+      return;
+    }
+    const text = `/${cmd.name}`;
+    if (cmd.argumentHint) {
+      draft = `${text} `;
+      return;
+    }
+    draft = "";
+    void sendText(text, "default", [], chatOptionsForSlashText(text));
+  }
+
+  function onComposerSubmit() {
+    if (slashOpen) {
+      const cmd = slashFiltered[slashIdx];
+      if (cmd) {
+        pickSlash(cmd);
+        return;
+      }
+    }
+    void send("default");
+  }
+
   function onTextareaKey(e: KeyboardEvent) {
+    if (slashQuery !== null && !slashHide) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        slashHide = true;
+        return;
+      }
+      if (slashFiltered.length) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          slashIdx = (slashIdx + 1) % slashFiltered.length;
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          slashIdx =
+            (slashIdx - 1 + slashFiltered.length) % slashFiltered.length;
+          return;
+        }
+        if (e.key === "Tab") {
+          e.preventDefault();
+          pickSlash(slashFiltered[slashIdx]!);
+          return;
+        }
+      }
+    }
     if (e.key === "Enter" && e.altKey && !e.shiftKey) {
       e.preventDefault();
       void send("followUp");
@@ -1048,43 +1416,94 @@
   const placeholder = $derived(
     bashMode
       ? draft.trimStart().startsWith("!!")
-        ? "Bash (no context)…"
-        : "Bash…"
+        ? "Bash (no context)"
+        : "Bash"
       : streaming
-        ? "Steer (Enter) · follow-up (⌥Enter)…"
-        : "Message pi…  (! for bash)",
+        ? "Steer (Enter) · follow-up (⌥Enter)"
+        : "Message pi  (/ commands · ! bash)",
   );
 
   /** Home / empty chat: centered prompt (Cursor-style). */
   const isHome = $derived(messages.length === 0 && !busy && !sending);
 
-  /** Thinking + tool cards: expanded by default; header toggles all. */
-  let foldOpen = $state(true);
-  let foldEpoch = $state(0);
-  function toggleFoldAll() {
-    foldOpen = !foldOpen;
-    foldEpoch += 1;
-  }
+  let workTick = $state(0);
+  $effect(() => {
+    if (!busy) return;
+    const timer = window.setInterval(() => {
+      workTick += 1;
+    }, 1000);
+    return () => clearInterval(timer);
+  });
 
   /**
    * Group into turns (user → until next user) so each user prompt can stick
    * while that turn's assistant/tool output scrolls.
    */
   const messageTurns = $derived.by(() => {
+    void workTick;
     const slice = messages.slice(hiddenMsgCount);
-    type Turn = { startIndex: number; items: { m: ChatMsg; i: number }[] };
-    const turns: Turn[] = [];
-    let cur: Turn | null = null;
+    type Item = { m: ChatMsg; i: number };
+    type RawTurn = { startIndex: number; items: Item[] };
+    const rawTurns: RawTurn[] = [];
+    let cur: RawTurn | null = null;
     for (let j = 0; j < slice.length; j++) {
       const i = j + hiddenMsgCount;
       const m = slice[j]!;
-      if (m.role === "user" || !cur) {
+      const followsStandaloneCommand = Boolean(
+        cur?.items[0] && isComposerCommand(cur.items[0].m),
+      );
+      if (startsTopLevelTurn(m) || followsStandaloneCommand || !cur) {
         cur = { startIndex: i, items: [] };
-        turns.push(cur);
+        rawTurns.push(cur);
       }
       cur.items.push({ m, i });
     }
-    return turns;
+    return rawTurns.map((turn, turnIndex) => {
+      const finalItem = [...turn.items]
+        .reverse()
+        .find(({ m }) => isFinalAssistantResponse(m));
+      const hasAgent = turn.items.some(({ m }) => m.role === "assistant");
+      const active = hasAgent && busy && turnIndex === rawTurns.length - 1 && !finalItem;
+      const userItems = turn.items.filter(({ m }) => m.role === "user");
+      const directItems = hasAgent
+        ? []
+        : turn.items.filter(({ m }) => m.role !== "user");
+      const workItems = hasAgent
+        ? turn.items.filter(
+            ({ m, i }) =>
+              m.role !== "user" &&
+              (i !== finalItem?.i || hasAssistantWork(m)),
+          )
+        : [];
+      const start = messageTimestamp(userItems[0]?.m ?? turn.items[0]?.m);
+      const end = finalItem
+        ? messageTimestamp(finalItem.m)
+        : active
+          ? Date.now()
+          : messageTimestamp(turn.items[turn.items.length - 1]?.m);
+      const turnKey = userItems[0]
+        ? messageKey(userItems[0].m, userItems[0].i)
+        : "";
+      const storedDuration = turnKey ? workDurations[turnKey] : undefined;
+      const timestampDuration =
+        start !== null && end !== null && end >= start ? end - start : null;
+      const durationMs =
+        storedDuration ??
+        (active && lastPromptAt > 0 ? Date.now() - lastPromptAt : timestampDuration);
+      const duration =
+        durationMs !== null && (active || durationMs >= 1000)
+          ? formatWorkDuration(durationMs)
+          : "";
+      return {
+        ...turn,
+        userItems,
+        directItems,
+        workItems,
+        finalItem,
+        completed: !active,
+        workLabel: `${active ? "Working" : "Worked"}${duration ? ` for ${duration}` : ""}`,
+      };
+    });
   });
 
   const promptBoxClass = $derived(
@@ -1140,87 +1559,40 @@
         </p>
       </div>
       <div
-        class="w-full max-w-2xl"
+        class="relative w-full max-w-2xl"
         ondragover={onComposerDragOver}
         ondrop={onComposerDrop}
       >
-        <PromptInput
+        <SlashMenu
+          open={slashOpen}
+          items={slashFiltered}
+          active={slashIdx}
+          onPick={pickSlash}
+          onActive={(i) => (slashIdx = i)}
+        />
+        <ChatComposer
           class={promptBoxClass}
           bind:value={draft}
+          {attachments}
+          placeholder="Ask anything  (/ commands · ! bash)"
+          textareaClass="min-h-[56px] text-[15px]"
           isLoading={sending}
-          onSubmit={() => send("default")}
-        >
-          {#if attachments.length}
-            <div class="flex flex-wrap items-center gap-1.5 px-3 pt-1.5">
-              {#each attachments as a, ai (`a${ai}`)}
-                <div class="relative shrink-0">
-                  <img
-                    src={a.preview}
-                    alt=""
-                    class="size-8 rounded border border-border/60 object-cover"
-                  />
-                  <button
-                    type="button"
-                    class="absolute -right-1 -top-1 flex size-4 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm hover:text-foreground"
-                    onclick={() => removeAttach(ai)}
-                    aria-label="Remove attachment"
-                  >
-                    <X class="size-2.5" />
-                  </button>
-                </div>
-              {/each}
-            </div>
-          {/if}
-          <PromptInputTextarea
-            placeholder="Ask anything…  (! for bash)"
-            class="min-h-[56px] text-[15px]"
-            onkeydown={onTextareaKey}
-            onpaste={onComposerPaste}
-          />
-          <PromptInputActions class="items-end justify-between gap-2 pt-1">
-            <div class="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-              <ComposerPlus onFiles={(f) => void addImageFiles(f)} />
-              {#if !session?.id}
-                <FolderPicker
-                  value={draftCwd}
-                  defaultPath={defaultCwd}
-                  onChange={onFolderChange}
-                />
-              {:else if session.cwd}
-                <span
-                  class="flex h-7 max-w-[14rem] items-center gap-1 truncate rounded-full bg-muted/50 px-2 text-[11px] text-muted-foreground"
-                  title={session.cwd}
-                >
-                  <Folder class="size-3 shrink-0 opacity-70" />
-                  {shortFolder(session.cwd)}
-                </span>
-              {/if}
-              <ModelPicker
-                sessionId={session?.id}
-                model={activeModel}
-                onChange={onModelChange}
-                onError={(m) => (error = m)}
-              />
-            </div>
-            <div class="flex shrink-0 items-center self-end">
-              <PromptInputAction tooltip="Send">
-                <Button
-                  size="icon"
-                  class="size-8 shrink-0 rounded-full"
-                  onclick={() => send("default")}
-                  disabled={!canSend}
-                  type="button"
-                >
-                  {#if sending}
-                    <Loader variant="circular" size="sm" class="size-3.5" />
-                  {:else}
-                    <ArrowUp class="size-4" />
-                  {/if}
-                </Button>
-              </PromptInputAction>
-            </div>
-          </PromptInputActions>
-        </PromptInput>
+          {canSend}
+          sessionId={session?.id}
+          sessionCwd={session?.cwd}
+          model={activeModel}
+          showFolderContext
+          folderValue={draftCwd}
+          defaultFolder={defaultCwd}
+          onSubmit={onComposerSubmit}
+          onFiles={(files) => void addImageFiles(files)}
+          onRemoveAttachment={removeAttach}
+          onPaste={onComposerPaste}
+          onKeydown={onTextareaKey}
+          onModelChange={onModelChange}
+          onError={(message) => (error = message)}
+          onFolderChange={onFolderChange}
+        />
         {#if error}
           <div
             class="mt-3 flex flex-wrap items-center justify-center gap-2 text-sm text-destructive"
@@ -1252,8 +1624,6 @@
         {showExpandGit}
         {onExpandSidebar}
         {onExpandGit}
-        {foldOpen}
-        onToggleFold={toggleFoldAll}
       />
     {/if}
 
@@ -1273,32 +1643,115 @@
               Show earlier {hiddenMsgCount} messages
             </button>
           {/if}
-          {#each messageTurns as turn, ti (turn.startIndex)}
+          {#each messageTurns as turn (turn.startIndex)}
             <div class="flex flex-col gap-5">
-              {#each turn.items as { m, i } (messageKey(m, i))}
-                {#if m.role === "toolResult" && isPairedToolResult(messages, i)}
-                  <!-- result folded into matching tool call card -->
+              {#each turn.userItems as { m, i } (messageKey(m, i))}
+                {#if editing?.index === i}
+                  <div
+                    data-inline-message-editor
+                    class="relative w-full"
+                    ondragover={onComposerDragOver}
+                    ondrop={onComposerDrop}
+                  >
+                    <div class="mb-1.5 px-1 text-[11px] font-medium text-muted-foreground">
+                      Edit message · sending starts a new branch
+                    </div>
+                    <ChatComposer
+                      class={`${promptBoxClass} ring-2 ring-primary/20`}
+                      bind:value={draft}
+                      {attachments}
+                      placeholder="Edit message"
+                      isLoading={sending || inlineEditSubmitting}
+                      disabled={inlineEditSubmitting}
+                      canSend={canSend && !inlineEditSubmitting}
+                      sessionId={session?.id}
+                      model={activeModel}
+                      cancelable
+                      sendTooltip="Send edited message"
+                      onSubmit={submitInlineEdit}
+                      onCancel={cancelInlineEdit}
+                      onFiles={(files) => void addImageFiles(files)}
+                      onRemoveAttachment={removeAttach}
+                      onPaste={onComposerPaste}
+                      onKeydown={(event) => {
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          cancelInlineEdit();
+                        }
+                      }}
+                      onModelChange={onModelChange}
+                      onError={(message) => (error = message)}
+                    />
+                  </div>
                 {:else}
-                  {@const isLiveAssistant =
-                    busy &&
-                    m.role === "assistant" &&
-                    !messages
-                      .slice(i + 1)
-                      .some((x) => x.role === "assistant" || x.role === "user")}
-                  {@const isLiveBash =
-                    busy &&
-                    m.role === "bashExecution" &&
-                    i === messages.length - 1}
                   <MessageBubble
                     message={m}
                     messages={messages}
                     index={i}
-                    streaming={isLiveAssistant || isLiveBash}
-                    onEditUser={editUserMessage}
-                    {foldOpen}
-                    {foldEpoch}
-                    sticky={m.role === "user"}
+                    onEditUser={() => editUserMessage(m, i)}
+                    onForkUser={forkUserMessage}
+                    sticky={true}
                   />
+                {/if}
+              {/each}
+
+              {#if turn.workItems.length > 0}
+                <details
+                  class="group/work min-w-0"
+                  open={!turn.completed}
+                >
+                  <summary
+                    class="flex w-fit cursor-pointer list-none items-center gap-1.5 text-[12px] font-medium text-muted-foreground select-none hover:text-foreground [&::-webkit-details-marker]:hidden"
+                  >
+                    {#if !turn.completed}
+                      <span class="size-1.5 animate-pulse rounded-full bg-amber-500" aria-hidden="true"></span>
+                    {/if}
+                    <span>{turn.workLabel}</span>
+                    <ChevronDown
+                      class="size-3.5 -rotate-90 transition-transform group-open/work:rotate-0"
+                    />
+                  </summary>
+                  <div class="mt-2 flex min-w-0 flex-col gap-3">
+                    {#each turn.workItems as { m, i } (messageKey(m, i))}
+                      {#if !(m.role === "toolResult" && isPairedToolResult(messages, i))}
+                        {@const isLiveAssistant =
+                          busy &&
+                          m.role === "assistant" &&
+                          !messages
+                            .slice(i + 1)
+                            .some((x) => x.role === "assistant" || x.role === "user")}
+                        <MessageBubble
+                          message={m}
+                          messages={messages}
+                          index={i}
+                          streaming={isLiveAssistant}
+                          assistantMode={i === turn.finalItem?.i ? "work-only" : "all"}
+                        />
+                      {/if}
+                    {/each}
+                  </div>
+                </details>
+              {/if}
+
+              {#if turn.finalItem}
+                <MessageBubble
+                  message={turn.finalItem.m}
+                  messages={messages}
+                  index={turn.finalItem.i}
+                  assistantMode="final-only"
+                />
+              {/if}
+
+              {#each turn.directItems as { m, i } (messageKey(m, i))}
+                {#if !(m.role === "toolResult" && isPairedToolResult(messages, i))}
+                  {@const isLiveBash =
+                    busy && m.role === "bashExecution" && i === messages.length - 1}
+                    <MessageBubble
+                      message={m}
+                      messages={messages}
+                      index={i}
+                      streaming={isLiveBash}
+                    />
                 {/if}
               {/each}
             </div>
@@ -1313,10 +1766,10 @@
               {/each}
             </div>
           {/if}
-          {#if busy}
+          {#if busy && bashRunning}
             <div class="flex items-center gap-1.5 px-0.5 text-xs text-muted-foreground">
               <span bind:this={spinEl} class="font-mono text-primary" aria-hidden="true">⠋</span>
-              <span>{bashRunning ? "bash…" : "Working"}</span>
+              <span>bash</span>
             </div>
           {/if}
           {#if error}
@@ -1351,94 +1804,48 @@
       {/if}
     </div>
 
-    <footer class="chat-footer border-t border-black/[0.06] p-3 dark:border-white/10">
-      <div
-        class="mx-auto w-full max-w-5xl"
-        ondragover={onComposerDragOver}
-        ondrop={onComposerDrop}
-      >
-        <PromptInput
-          class={promptBoxClass}
-          bind:value={draft}
-          isLoading={busy}
-          onSubmit={() => send("default")}
-          disabled={session ? !session.running && !session.id : false}
+    {#if !editing}
+      <footer class="chat-footer p-3">
+        <div
+          class="relative mx-auto w-full max-w-5xl"
+          ondragover={onComposerDragOver}
+          ondrop={onComposerDrop}
         >
-          {#if attachments.length}
-            <div class="flex flex-wrap items-center gap-1.5 px-3 pt-1.5">
-              {#each attachments as a, ai (`a${ai}`)}
-                <div class="relative shrink-0">
-                  <img
-                    src={a.preview}
-                    alt=""
-                    class="size-8 rounded border border-border/60 object-cover"
-                  />
-                  <button
-                    type="button"
-                    class="absolute -right-1 -top-1 flex size-4 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm hover:text-foreground"
-                    onclick={() => removeAttach(ai)}
-                    aria-label="Remove attachment"
-                  >
-                    <X class="size-2.5" />
-                  </button>
-                </div>
-              {/each}
-            </div>
-          {/if}
-          <PromptInputTextarea
-            {placeholder}
-            class="min-h-[44px]"
-            onkeydown={onTextareaKey}
-            onpaste={onComposerPaste}
+          <SlashMenu
+            open={slashOpen}
+            items={slashFiltered}
+            active={slashIdx}
+            onPick={pickSlash}
+            onActive={(i) => (slashIdx = i)}
           />
-          <PromptInputActions class="items-end justify-between gap-2 pt-1">
-            <div class="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-              <ComposerPlus onFiles={(f) => void addImageFiles(f)} />
-              {#if session?.id}
-                <ModelPicker
-                  sessionId={session.id}
-                  model={activeModel}
-                  disabled={!session.running && !session.id}
-                  onChange={onModelChange}
-                  onError={(m) => (error = m)}
-                />
-              {/if}
-            </div>
-            <div class="flex shrink-0 items-center gap-1 self-end">
-              {#if busy}
-                <PromptInputAction tooltip="Stop">
-                  <Button
-                    size="icon"
-                    class="size-8 shrink-0 rounded-full"
-                    onclick={stop}
-                    type="button"
-                  >
-                    <Square class="size-3.5 fill-current" />
-                  </Button>
-                </PromptInputAction>
-              {:else}
-                <PromptInputAction tooltip={bashMode ? "Run bash" : "Send"}>
-                  <Button
-                    size="icon"
-                    class="size-8 shrink-0 rounded-full"
-                    onclick={() => send("default")}
-                    disabled={!canSend}
-                    type="button"
-                  >
-                    {#if sending}
-                      <Loader variant="circular" size="sm" class="size-3.5" />
-                    {:else}
-                      <ArrowUp class="size-4" />
-                    {/if}
-                  </Button>
-                </PromptInputAction>
-              {/if}
-            </div>
-          </PromptInputActions>
-        </PromptInput>
-      </div>
-    </footer>
+          <ChatComposer
+            class={promptBoxClass}
+            bind:value={draft}
+            {attachments}
+            {placeholder}
+            isLoading={busy}
+            disabled={session ? !session.running && !session.id : false}
+            {canSend}
+            {busy}
+            sendTooltip={bashMode ? "Run bash" : "Send"}
+            sessionId={session?.id}
+            model={activeModel}
+            showModel={Boolean(session?.id)}
+            modelDisabled={session ? !session.running && !session.id : false}
+            onSubmit={onComposerSubmit}
+            onStop={stop}
+            onFiles={(files) => void addImageFiles(files)}
+            onRemoveAttachment={removeAttach}
+            onPaste={onComposerPaste}
+            onKeydown={onTextareaKey}
+            onModelChange={onModelChange}
+            onError={(message) => (error = message)}
+          />
+        </div>
+      </footer>
+    {/if}
   {/if}
+
 </section>
 
 <style>
@@ -1450,6 +1857,6 @@
     color: hsl(0 0% 98%);
   }
   .chat-footer {
-    background: var(--pi-canvas-footer);
+    background: var(--pi-canvas);
   }
 </style>

@@ -1,38 +1,39 @@
 <script lang="ts">
   /** Collapsible tool call / result row for chat. */
+  import HighlightedPre from "$lib/components/HighlightedPre.svelte";
   import LinkifiedPre from "$lib/components/LinkifiedPre.svelte";
 
   type Status = "running" | "done" | "error";
 
   type Props = {
     name: string;
+    meta?: string;
     args?: string;
     result?: string;
     status?: Status;
-    /** Initial / bulk expand state (default open). */
-    open?: boolean;
-    /** Bump to force open ← bulk expand/collapse all. */
-    foldEpoch?: number;
     /** Max lines of result before "show more". */
     maxResultLines?: number;
+    /** Syntax language for a structured result (for example ts or diff). */
+    argsLang?: string;
+    argsLabel?: string;
+    resultLang?: string;
+    resultLabel?: string;
   };
 
   let {
     name,
+    meta = "",
     args = "",
     result = "",
     status = "done",
-    open = true,
-    foldEpoch = 0,
     maxResultLines = 20,
+    argsLang = "",
+    argsLabel = "args",
+    resultLang = "",
+    resultLabel = "result",
   }: Props = $props();
 
-  let localOpen = $state(true);
-
-  $effect(() => {
-    void foldEpoch;
-    localOpen = open;
-  });
+  let localOpen = $state(false);
 
   const chip = $derived(
     status === "running"
@@ -73,6 +74,11 @@
       aria-hidden="true"
     ></span>
     <span class="min-w-0 flex-1 truncate font-mono text-[11.5px] text-foreground/90">{name}</span>
+    {#if meta}
+      <span
+        class="shrink-0 rounded bg-background/70 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+      >{meta}</span>
+    {/if}
     <span
       class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide {chip.class}"
     >
@@ -91,17 +97,33 @@
       {#if args.trim()}
         <div>
           <div class="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-            args
+            {argsLabel}
           </div>
-          <LinkifiedPre text={args} class="{preClass} max-h-48" />
+          {#if argsLang}
+            <HighlightedPre
+              text={args}
+              lang={argsLang}
+              class="max-h-48 overflow-auto rounded-md bg-background/80"
+            />
+          {:else}
+            <LinkifiedPre text={args} class="{preClass} max-h-48" />
+          {/if}
         </div>
       {/if}
       {#if result.trim()}
         <div>
           <div class="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-            result
+            {resultLabel}
           </div>
-          <LinkifiedPre text={resultShown} class={preClass} />
+          {#if resultLang}
+            <HighlightedPre
+              text={resultShown}
+              lang={resultLang}
+              class="max-h-64 overflow-auto rounded-md bg-background/80"
+            />
+          {:else}
+            <LinkifiedPre text={resultShown} class={preClass} />
+          {/if}
           {#if resultLong}
             <button
               type="button"

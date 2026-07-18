@@ -12,7 +12,7 @@
 </script>
 
 <div
-	class={cn("flex w-full items-end gap-2.5", className)}
+	class={cn("flex w-full items-start gap-2.5", className)}
 	data-slot="message"
 	{...rest}
 >
