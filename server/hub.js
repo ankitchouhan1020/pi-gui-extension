@@ -1154,6 +1154,48 @@ export class SessionHub {
   }
 
   /**
+   * Invocable slash commands (extension + prompt templates + skills).
+   * Same set as pi RPC `get_commands` / session.prompt `/name`.
+   * @param {string} id
+   */
+  getCommands(id) {
+    const s = this.require(id);
+    const session = s.session;
+    /** @type {{ name: string, description: string, source: string, argumentHint?: string, scope?: string }[]} */
+    const commands = [];
+    const runner = session.extensionRunner;
+    if (runner?.getRegisteredCommands) {
+      for (const command of runner.getRegisteredCommands()) {
+        commands.push({
+          name: command.invocationName,
+          description: command.description || "",
+          source: "extension",
+          scope: command.sourceInfo?.scope,
+        });
+      }
+    }
+    for (const template of session.promptTemplates ?? []) {
+      commands.push({
+        name: template.name,
+        description: template.description || "",
+        source: "prompt",
+        argumentHint: template.argumentHint,
+        scope: template.sourceInfo?.scope,
+      });
+    }
+    const skills = session.resourceLoader?.getSkills?.()?.skills ?? [];
+    for (const skill of skills) {
+      commands.push({
+        name: `skill:${skill.name}`,
+        description: skill.description || "",
+        source: "skill",
+        scope: skill.sourceInfo?.scope,
+      });
+    }
+    return { commands };
+  }
+
+  /**
    * @param {string} id
    * @param {string[]} active
    */

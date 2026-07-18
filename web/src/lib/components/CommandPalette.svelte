@@ -34,6 +34,7 @@
     listModels,
     listSkills,
     listExtensions,
+    listCommands,
     messageText,
     navigateTree,
     setPendingEditorText,
@@ -43,6 +44,7 @@
     type SessionRow,
     type SkillInfo,
     type ExtensionInfo,
+    type SlashCommandInfo,
     type TreeNode,
   } from "$lib/api";
 
@@ -163,6 +165,8 @@
   let forkCandidates = $state<ForkCandidate[]>([]);
   let forkLoading = $state(false);
   let forkError = $state("");
+  /** Extension + prompt + skill slash commands (session.prompt `/name`). */
+  let slashCommands = $state<SlashCommandInfo[]>([]);
   let continueCopied = $state(false);
 
   /** Shell-safe `pi --session <id>` for resuming this session in a terminal. */
@@ -368,6 +372,19 @@
     }
   }
 
+  async function loadSlashCommands() {
+    if (!session?.id) {
+      slashCommands = [];
+      return;
+    }
+    try {
+      const res = await listCommands(session.id);
+      slashCommands = res.commands ?? [];
+    } catch {
+      slashCommands = [];
+    }
+  }
+
   async function loadExtensions() {
     if (!session?.id) return;
     extensionsLoading = true;
@@ -531,6 +548,35 @@
     } catch {
       /* keep palette open so user can retry */
     }
+  }
+
+  /** Run `/name` via chat, or drop into the editor when args are expected. */
+  async function pickSlash(cmd: SlashCommandInfo) {
+    if (!session?.id || !cmd.name) return;
+    const text = `/${cmd.name}`;
+    if (cmd.argumentHint) {
+      setPendingEditorText(`${text} `);
+      onClose();
+      return;
+    }
+    try {
+      await chatPrompt(text);
+      onClose();
+    } catch {
+      /* keep palette open so user can retry */
+    }
+  }
+
+  function slashCategory(source: string): string {
+    if (source === "prompt") return "Prompt";
+    if (source === "skill") return "Skill";
+    return "Extension";
+  }
+
+  function slashIcon(source: string) {
+    if (source === "prompt") return FileText;
+    if (source === "skill") return Sparkles;
+    return Terminal;
   }
 
   async function pickTreeNode(node: TreeNode) {
@@ -841,6 +887,24 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
         action: openExtensions,
       });
 
+      // Invocable slash commands (extension / prompt / skill) — same as pi `/`
+      for (const cmd of slashCommands) {
+        if (!cmd.name) continue;
+        const hint = cmd.argumentHint?.trim();
+        const desc = (cmd.description || "").replace(/\s+/g, " ").trim();
+        cmds.push({
+          id: `slash-${cmd.source}-${cmd.name}`,
+          label: `/${cmd.name}`,
+          caption: [hint, desc].filter(Boolean).join(" — ") || undefined,
+          category: slashCategory(cmd.source),
+          icon: slashIcon(cmd.source),
+          keywords: [cmd.source, cmd.scope, hint, desc, "slash", "command"]
+            .filter(Boolean)
+            .join(" "),
+          action: () => void pickSlash(cmd),
+        });
+      }
+
       cmds.push({
         id: "tree",
         label: "Tree",
@@ -963,9 +1027,10 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
   const filtered = $derived.by(() => {
     const q = query.trim().toLowerCase();
     if (!q) {
-      // Don't dump every closed disk session into the idle palette.
+      // Don't dump every closed disk session / skill into the idle palette.
       let recent = 0;
       return commands.filter((c) => {
+        if (c.category === "Skill") return false;
         if (c.category !== "Recent") return true;
         if (recent >= 8) return false;
         recent++;
@@ -999,6 +1064,7 @@ h3{margin:1.5rem 0 0.5rem;text-transform:capitalize}</style></head><body>
       query = "";
       selectedIndex = 0;
       view = "commands";
+      void loadSlashCommands();
       requestAnimationFrame(() => inputRef?.focus());
     }
   });

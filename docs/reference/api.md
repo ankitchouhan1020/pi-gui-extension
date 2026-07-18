@@ -38,6 +38,7 @@ Source of truth: `server/http.js`. Client wrappers: `web/src/lib/api.ts`.
 | GET/POST | `/api/sessions/:id/tools` | list / set active tools |
 | GET | `/api/sessions/:id/skills` | skills |
 | GET | `/api/sessions/:id/extensions` | loaded extensions |
+| GET | `/api/sessions/:id/commands` | slash commands (extension + prompt + skill) |
 | GET | `/api/sessions/:id/git` | working-tree status; `?path=` → file diff |
 | GET | `/api/sessions/:id/events` | **SSE** stream (`?after=` / `Last-Event-ID`) |
 

@@ -460,6 +460,22 @@ export function listExtensions(id: string) {
   );
 }
 
+/** Invocable slash command (pi `get_commands` — extension / prompt / skill). */
+export type SlashCommandInfo = {
+  name: string;
+  description: string;
+  source: "extension" | "prompt" | "skill" | string;
+  argumentHint?: string;
+  scope?: string;
+};
+
+/** Slash commands available via session.prompt (`/name`). */
+export function listCommands(id: string) {
+  return req<{ commands: SlashCommandInfo[] }>(
+    `/api/sessions/${encodeURIComponent(id)}/commands`,
+  );
+}
+
 /** Working-tree status for session cwd. */
 export type GitFile = {
   path: string;

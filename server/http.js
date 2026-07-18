@@ -615,6 +615,12 @@ async function handleApi(req, res) {
       return json(res, 200, hub.getExtensions(id));
     }
 
+    // GET /api/sessions/:id/commands — slash commands (extension + prompt + skill)
+    id = sessionAction(pathname, "commands");
+    if (method === "GET" && id) {
+      return json(res, 200, hub.getCommands(id));
+    }
+
     // GET /api/sessions/:id/git — working tree status
     // GET /api/sessions/:id/git?path= — unified diff for one file
     id = sessionAction(pathname, "git");
