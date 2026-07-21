@@ -28,6 +28,7 @@
     "node": ">=20"
   },
   "files": [
+    "index.js",
     "server/http.js",
     "server/hub.js",
     "server/skill-workspace.js",
@@ -60,5 +61,6 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
-  }
+  },
+  "main": "./index.js"
 }
