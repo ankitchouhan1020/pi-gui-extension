@@ -1580,7 +1580,7 @@
         </p>
       </div>
       <div
-        class="home-composer relative z-[1] w-full max-w-2xl"
+        class="home-composer relative z-[2] w-full max-w-2xl"
         ondragover={onComposerDragOver}
         ondrop={onComposerDrop}
       >
